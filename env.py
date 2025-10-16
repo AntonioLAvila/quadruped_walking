@@ -3,7 +3,6 @@ from pydrake.all import (
     AddMultibodyPlantSceneGraph,
     Parser,
     Simulator,
-    AddDefaultVisualization,
     RigidTransform,
     RollPitchYaw,
     CoulombFriction,
@@ -20,9 +19,6 @@ import numpy as np
 
 
 def make_a1(meshcat: Meshcat) -> tuple[Diagram, MultibodyPlant, ModelInstanceIndex]:
-    '''
-    returns the a1 diagram and a hook for the a1
-    '''
     builder = DiagramBuilder()
 
     plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=1e-4)
@@ -58,7 +54,7 @@ if __name__ == '__main__':
 
     initial_pose = RigidTransform(
         RollPitchYaw(0, 0, 0),   # no rotation
-        [0, 0, 0.3]              # x, y, z position
+        [0, 0, 1.0]              # x, y, z position
     )
     plant.SetFreeBodyPose(
         plant_context,
