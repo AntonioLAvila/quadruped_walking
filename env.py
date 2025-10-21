@@ -166,6 +166,8 @@ if __name__ == '__main__':
 
     model.learn(total_timesteps=1000000, progress_bar=True)
 
+    model.save('ppo_A1_final')
+
 
     obs, _ = env.reset()
     while True:
