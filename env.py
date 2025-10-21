@@ -164,7 +164,7 @@ if __name__ == '__main__':
 
     model = PPO('MlpPolicy', env, verbose=1)
 
-    model.learn(total_timesteps=1000000, progress_bar=True)
+    model.learn(total_timesteps=100000, progress_bar=True)
 
     model.save('ppo_A1_final')
 
