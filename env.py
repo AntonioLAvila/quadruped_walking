@@ -20,10 +20,8 @@ import numpy as np
 from pydrake.gym import DrakeGymEnv
 from gymnasium.spaces import Box
 from stable_baselines3 import PPO
-from util import ObservationExtractor
+from util import ObservationExtractor, A1_q0, standing_torque
 from typing import Callable, Optional
-
-A1_q0 = [1, 0, 0, 0] + [0, 0, 0.3] + [0, np.pi/4, -np.pi/2] * 4
 
 
 def make_a1_diagram(meshcat: Meshcat = None) -> tuple[Diagram, MultibodyPlant, ModelInstanceIndex]:
@@ -140,8 +138,9 @@ def reward_fn(diagram: Diagram, context: Context) -> float:
     reward += 0.5 * np.exp(-100 * (p_WT[2] - z_d)**2)
 
     # Effort
-    # actuation = diagram.get_input_port(0).Eval(context)
-    # reward += -1e-3 * np.sum(actuation)
+    actuation = diagram.get_input_port(0).Eval(context)
+    actuation_error = np.sum(actuation - standing_torque)
+    reward += np.exp(-1 * (actuation_error)**2)
 
     return reward
 
@@ -160,8 +159,8 @@ if __name__ == '__main__':
 
     env = make_gym_env(reward_fn, make_simulation_maker, meshcat=meshcat)
 
-    env.reset()
-    env.render()
+    # env.reset()
+    # env.render()
 
     model = PPO('MlpPolicy', env, verbose=1)
 
