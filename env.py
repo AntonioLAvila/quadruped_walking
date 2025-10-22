@@ -21,26 +21,35 @@ from pydrake.all import (
 import numpy as np
 from pydrake.gym import DrakeGymEnv
 from gymnasium.spaces import Box
-from util import A1_q0, standing_torque, time_step
+from util import A1_q0, standing_torque, time_step, torque_scaler
 from typing import Callable, Optional
 
 
 class ObservationExtractor(LeafSystem):
     def __init__(self, plant: MultibodyPlant):
         super().__init__()
-        self.plant = plant
         # NOTE 12 joint positions, 3 body rotational velocities, 3 body translational, 12 joint velocities
         # in that order
         # TODO maybe add gravity in the body frame
         obs_dim = 12 + 12 + 3 + 3 
-        self.input_port = self.DeclareVectorInputPort("state", plant.num_multibody_states())
-        self.output_port = self.DeclareVectorOutputPort("observation", BasicVector(obs_dim), self.calc_obs)
+        self.input_port = self.DeclareVectorInputPort('state', plant.num_multibody_states())
+        self.output_port = self.DeclareVectorOutputPort('observation', BasicVector(obs_dim), self.calc_obs)
 
-    def calc_obs(self, context, output):
+    def calc_obs(self, context: Context, output: BasicVector):
         # TODO add noise argagrgagrgragargragragaargargarrgrggrag
         x = self.get_input_port().Eval(context)
         obs = x[7:]
         output.SetFromVector(obs)
+
+class TorqueMultiplier(LeafSystem):
+    def __init__(self, plant: MultibodyPlant, scale=10):
+        super().__init__()
+        self.input_port = self.DeclareVectorInputPort("NN_torque", plant.num_actuators())
+        self.output_port = self.DeclareVectorOutputPort("applied_torque", BasicVector(plant.num_actuators()), self.calc_torque)
+
+    def calc_torque(self, context: Context, output: BasicVector):
+        torque = self.input_port.Eval(context)
+        output.SetFromVector(10*torque)
 
 
 def make_a1_diagram(
@@ -72,11 +81,17 @@ def make_a1_diagram(
     plant.SetDefaultPositions(A1_q0)
 
     # wire up observation/actuation
-    builder.ExportInput(plant.get_actuation_input_port(), 'actuation') # 12
+    torque_multiplier = TorqueMultiplier(plant, scale=torque_scaler)
+    builder.AddNamedSystem('torque_multiplier', torque_multiplier)
     observation_extractor = ObservationExtractor(plant)
     builder.AddNamedSystem('observation_extractor', observation_extractor)
+
+    builder.Connect(torque_multiplier.output_port, plant.get_actuation_input_port())
     builder.Connect(plant.get_state_output_port(), observation_extractor.input_port)
+
+    builder.ExportInput(torque_multiplier.input_port) # 12
     builder.ExportOutput(observation_extractor.output_port) # 30
+
 
     # visualization options
     if meshcat is not None:
@@ -144,33 +159,65 @@ def reward_fn(diagram: Diagram, context: Context) -> float:
     plant: MultibodyPlant = diagram.GetSubsystemByName('plant')
     plant_context = plant.GetMyContextFromRoot(context)
     trunk = plant.GetBodyByName('trunk')
-    reward = 0
-
-    # move forward
-    v_d = 1.0 # m/s
-    v_WT = trunk.EvalSpatialVelocityInWorld(plant_context).translational()
-    v_fwd = v_WT[0]
-    reward += np.exp(-2.5 * (v_fwd - v_d)**2)
 
     X_WT = trunk.EvalPoseInWorld(plant_context)
     R_WT = X_WT.rotation()
     p_WT = X_WT.translation()
+    V_WT = trunk.EvalSpatialVelocityInWorld(plant_context)
+    v_WT = V_WT.translational()
+    omega_WT = V_WT.rotational()
+    actuation = diagram.get_input_port(0).Eval(context)
+    joint_positions = plant.GetPositions(plant_context)[7:]
+
+    reward = 0
+
+    # Linear velocity
+    v_xy_des = np.array([1.5, 0])
+    v_xy = v_WT[:2]
+    diff_v_xy = v_xy_des - v_xy
+    reward += time_step * np.exp(-np.dot(diff_v_xy, diff_v_xy)/0.25)
+
+    v_z = v_WT[2]
+    diff_v_z = (0.3 - v_z)
+    reward += -2 * time_step * np.dot(diff_v_z, diff_v_z)
+    # reward += -2 * time_step * v_z**2
+
+    # Angular velocity
+    omega_xy = omega_WT[:2]
+    reward += -0.05 * time_step * np.dot(omega_xy, omega_xy)
+
+    omega_z = omega_WT[2]
+    reward += 0.5 * time_step * np.exp(-1 * omega_z**2 / 0.25)
 
     # Orientation
     world_z = np.array([0,0,1])
     trunk_z = R_WT.col(2)
-    reward += 2*np.dot(world_z, trunk_z)
+    diff_o = world_z - trunk_z
+    reward += -time_step * np.dot(diff_o, diff_o)
 
-    # Height
-    z_d = 0.3
-    reward += 0.5 * np.exp(-100 * (p_WT[2] - z_d)**2)
+    # Torque
+    # reward += -2e-4 * np.dot(actuation, actuation)
 
-    # Effort
-    # actuation = diagram.get_input_port(0).Eval(context)
-    # actuation_error = np.sum(actuation - standing_torque)
-    # reward += np.exp(-1 * (actuation_error)**2)
-    actuation = diagram.get_input_port(0).Eval(context)
-    reward += -1e-4 * np.sum(actuation)
+    # Joint positions
+    for q, q_des in zip(joint_positions, A1_q0[7:]):
+        reward += -time_step * (q_des - q)
+
+    # Heel collision
+    knee_frames = [
+        plant.GetFrameByName('FL_foot_fixed_parent'),
+        plant.GetFrameByName('FR_foot_fixed_parent'),
+        plant.GetFrameByName('RL_foot_fixed_parent'),
+        plant.GetFrameByName('RR_foot_fixed_parent')
+    ]
+    for knee_frame in knee_frames:
+        p_knee = plant.CalcPointsPositions(
+            plant_context,
+            knee_frame,
+            [0,0,0],
+            plant.world_frame(),
+        )
+        if p_knee[2] < 0.1:
+            reward += -time_step
 
     return reward
 
@@ -178,8 +225,13 @@ def reward_fn(diagram: Diagram, context: Context) -> float:
 if __name__ == '__main__':
     meshcat: Meshcat = StartMeshcat()
 
-    diagram, plant, a1 = make_a1_diagram(meshcat)
+    diagram, plant, a1 = make_a1_diagram(meshcat=meshcat)
+
     diagram_context = diagram.CreateDefaultContext()
+
+    input_port = diagram.get_input_port(0)
+    input_port.FixValue(diagram_context, np.zeros(plant.num_actuators()))
+
     sim = Simulator(diagram, diagram_context)
     meshcat.StartRecording()
     sim.AdvanceTo(3)
