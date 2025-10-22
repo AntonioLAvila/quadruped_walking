@@ -19,7 +19,6 @@ from pydrake.all import (
 import numpy as np
 from pydrake.gym import DrakeGymEnv
 from gymnasium.spaces import Box
-from stable_baselines3 import PPO
 from util import ObservationExtractor, A1_q0, standing_torque
 from typing import Callable, Optional
 
@@ -138,9 +137,11 @@ def reward_fn(diagram: Diagram, context: Context) -> float:
     reward += 0.5 * np.exp(-100 * (p_WT[2] - z_d)**2)
 
     # Effort
+    # actuation = diagram.get_input_port(0).Eval(context)
+    # actuation_error = np.sum(actuation - standing_torque)
+    # reward += np.exp(-1 * (actuation_error)**2)
     actuation = diagram.get_input_port(0).Eval(context)
-    actuation_error = np.sum(actuation - standing_torque)
-    reward += np.exp(-1 * (actuation_error)**2)
+    reward += -1e-4 * np.sum(actuation)
 
     return reward
 
@@ -148,31 +149,11 @@ def reward_fn(diagram: Diagram, context: Context) -> float:
 if __name__ == '__main__':
     meshcat: Meshcat = StartMeshcat()
 
-    # diagram, plant, a1 = make_a1_diagram(meshcat)
-    # diagram_context = diagram.CreateDefaultContext()
-    # sim = Simulator(diagram, diagram_context)
-    # meshcat.StartRecording()
-    # sim.AdvanceTo(3)
-    # meshcat.StopRecording()
-    # meshcat.PublishRecording()
-    # while True: ...
-
-    env = make_gym_env(reward_fn, make_simulation_maker, meshcat=meshcat)
-
-    # env.reset()
-    # env.render()
-
-    model = PPO('MlpPolicy', env, verbose=1)
-
-    model.learn(total_timesteps=100000, progress_bar=True)
-
-    model.save('ppo_A1_final')
-
-
-    obs, _ = env.reset()
-    while True:
-        action, _states = model.predict(obs, deterministic=True)
-        obs, reward, terminated, truncated, info = env.step(action)
-        if terminated or truncated:
-            print("Episode finished. Resetting.")
-            obs, _ = env.reset()
+    diagram, plant, a1 = make_a1_diagram(meshcat)
+    diagram_context = diagram.CreateDefaultContext()
+    sim = Simulator(diagram, diagram_context)
+    meshcat.StartRecording()
+    sim.AdvanceTo(3)
+    meshcat.StopRecording()
+    meshcat.PublishRecording()
+    while True: ...
