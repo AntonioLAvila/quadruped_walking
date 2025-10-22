@@ -14,16 +14,40 @@ from pydrake.all import (
     MeshcatVisualizer,
     ContactVisualizer,
     Context,
-    RandomGenerator
+    RandomGenerator,
+    LeafSystem,
+    BasicVector
 )
 import numpy as np
 from pydrake.gym import DrakeGymEnv
 from gymnasium.spaces import Box
-from util import ObservationExtractor, A1_q0, standing_torque
+from util import A1_q0, standing_torque, time_step
 from typing import Callable, Optional
 
 
-def make_a1_diagram(meshcat: Meshcat = None) -> tuple[Diagram, MultibodyPlant, ModelInstanceIndex]:
+class ObservationExtractor(LeafSystem):
+    def __init__(self, plant: MultibodyPlant):
+        super().__init__()
+        self.plant = plant
+        # NOTE 12 joint positions, 3 body rotational velocities, 3 body translational, 12 joint velocities
+        # in that order
+        # TODO maybe add gravity in the body frame
+        obs_dim = 12 + 12 + 3 + 3 
+        self.input_port = self.DeclareVectorInputPort("state", plant.num_multibody_states())
+        self.output_port = self.DeclareVectorOutputPort("observation", BasicVector(obs_dim), self.calc_obs)
+
+    def calc_obs(self, context, output):
+        # TODO add noise argagrgagrgragargragragaargargarrgrggrag
+        x = self.get_input_port().Eval(context)
+        obs = x[7:]
+        output.SetFromVector(obs)
+
+
+def make_a1_diagram(
+    static_friction=1.0,
+    dynamic_friction=1.0,
+    meshcat: Meshcat = None
+) -> tuple[Diagram, MultibodyPlant, ModelInstanceIndex]:
     builder = DiagramBuilder()
     plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=1e-4)
     plant: MultibodyPlant = plant
@@ -39,7 +63,7 @@ def make_a1_diagram(meshcat: Meshcat = None) -> tuple[Diagram, MultibodyPlant, M
         HalfSpace.MakePose(np.array([0, 0, 1]), np.zeros(3)),
         HalfSpace(),
         'ground_collision',
-        CoulombFriction(1.0, 1.0),
+        CoulombFriction(static_friction, dynamic_friction),
     )
 
     plant.Finalize()
@@ -63,13 +87,17 @@ def make_a1_diagram(meshcat: Meshcat = None) -> tuple[Diagram, MultibodyPlant, M
 
     return diagram, plant, a1
 
+
 def make_gym_env(
     reward_fn: Callable[[Diagram, Context], float],
     make_sim_maker: Callable[[Optional[Meshcat]], Callable[[RandomGenerator], Simulator]],
-    time_step: float = 0.01,
-    meshcat: Meshcat = None,
-) -> DrakeGymEnv:
-    _, plant, _ = make_a1_diagram(meshcat)
+    visualize=False,
+) -> tuple[DrakeGymEnv, Optional[Meshcat]]:
+    meshcat = None
+    if visualize:
+        meshcat = StartMeshcat()
+
+    _, plant, _ = make_a1_diagram()
 
     action_space = Box(
         low=plant.GetEffortLowerLimits(),
@@ -97,12 +125,13 @@ def make_gym_env(
         reward=reward_fn
     )
 
-    return env
+    return env, meshcat
+
 
 def make_simulation_maker(meshcat: Meshcat = None):
 
     def simulation_factory(generator: RandomGenerator) -> Simulator:
-        diagram, _, _ = make_a1_diagram(meshcat)
+        diagram, _, _ = make_a1_diagram(meshcat=meshcat)
         simulator = Simulator(diagram)
         # TODO randomize stuff agraagaragragragragragragrgragragra
         return simulator
@@ -111,7 +140,7 @@ def make_simulation_maker(meshcat: Meshcat = None):
 
 
 def reward_fn(diagram: Diagram, context: Context) -> float:
-    # TODO add some default joint efforts so that it can at least stand penalize that instead
+    # TODO make this good
     plant: MultibodyPlant = diagram.GetSubsystemByName('plant')
     plant_context = plant.GetMyContextFromRoot(context)
     trunk = plant.GetBodyByName('trunk')

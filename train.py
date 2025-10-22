@@ -1,7 +1,6 @@
 from env import make_simulation_maker, reward_fn, make_gym_env
 from stable_baselines3 import PPO
 from argparse import ArgumentParser
-from pydrake.all import StartMeshcat
 
 
 if __name__ == '__main__':
@@ -12,10 +11,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     args = vars(args)
 
-    if args['visualize']:
-        env = make_gym_env(reward_fn, make_simulation_maker, meshcat=StartMeshcat())
-    else:
-        env = make_gym_env(reward_fn, make_simulation_maker)
+    env, meshcat = make_gym_env(reward_fn, make_simulation_maker, visualize=args['visualize'])
    
     model = PPO('MlpPolicy', env, verbose=1)
 

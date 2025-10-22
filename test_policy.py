@@ -13,9 +13,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
     args = vars(args)
 
-    meshcat: Meshcat = StartMeshcat()
-
-    env = make_gym_env(reward_fn, make_simulation_maker, meshcat=meshcat)
+    env, meshcat = make_gym_env(reward_fn, make_simulation_maker, visualize=True)
 
     model = PPO.load(args['model_path'], env=env)
 
