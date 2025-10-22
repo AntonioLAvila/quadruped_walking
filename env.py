@@ -16,7 +16,8 @@ from pydrake.all import (
     Context,
     RandomGenerator,
     LeafSystem,
-    BasicVector
+    BasicVector,
+    AddFrameTriadIllustration
 )
 import numpy as np
 from pydrake.gym import DrakeGymEnv
@@ -41,15 +42,21 @@ class ObservationExtractor(LeafSystem):
         obs = x[7:]
         output.SetFromVector(obs)
 
+
 class TorqueMultiplier(LeafSystem):
     def __init__(self, plant: MultibodyPlant, scale=10):
         super().__init__()
-        self.input_port = self.DeclareVectorInputPort("NN_torque", plant.num_actuators())
+        self.scale = scale
+        self.lower_limits = plant.GetEffortLowerLimits()
+        self.upper_limits = plant.GetEffortUpperLimits()
+        self.input_port = self.DeclareVectorInputPort("NN_out", plant.num_actuators())
         self.output_port = self.DeclareVectorOutputPort("applied_torque", BasicVector(plant.num_actuators()), self.calc_torque)
 
     def calc_torque(self, context: Context, output: BasicVector):
         torque = self.input_port.Eval(context)
-        output.SetFromVector(10*torque)
+        scaled = self.scale*torque
+        clamped = np.minimum(np.maximum(scaled, self.lower_limits), self.upper_limits)
+        output.SetFromVector(clamped)
 
 
 def make_a1_diagram(
@@ -91,6 +98,13 @@ def make_a1_diagram(
 
     builder.ExportInput(torque_multiplier.input_port) # 12
     builder.ExportOutput(observation_extractor.output_port) # 30
+
+
+    # frames for debug
+    # AddFrameTriadIllustration(
+    #     scene_graph=scene_graph,
+    #     frame=plant.GetFrameByName('FL_calf_joint_parent')
+    # )
 
 
     # visualization options
@@ -164,6 +178,7 @@ def reward_fn(diagram: Diagram, context: Context) -> float:
     R_WT = X_WT.rotation()
     p_WT = X_WT.translation()
     V_WT = trunk.EvalSpatialVelocityInWorld(plant_context)
+    # V_WT = trunk.body_frame().CalcSpatialVelocity(plant_context, trunk.body_frame(), trunk.body_frame())
     v_WT = V_WT.translational()
     omega_WT = V_WT.rotational()
     actuation = diagram.get_input_port(0).Eval(context)
@@ -175,11 +190,11 @@ def reward_fn(diagram: Diagram, context: Context) -> float:
     v_xy_des = np.array([1.5, 0])
     v_xy = v_WT[:2]
     diff_v_xy = v_xy_des - v_xy
-    reward += time_step * np.exp(-np.dot(diff_v_xy, diff_v_xy)/0.25)
+    reward += 2 * time_step * np.exp(-np.dot(diff_v_xy, diff_v_xy)/0.25)
 
-    v_z = v_WT[2]
-    diff_v_z = (0.3 - v_z)
-    reward += -2 * time_step * np.dot(diff_v_z, diff_v_z)
+    p_z = p_WT[2]
+    diff_p_z = (0.3 - p_z)
+    reward += -time_step * np.dot(diff_p_z, diff_p_z)
     # reward += -2 * time_step * v_z**2
 
     # Angular velocity
@@ -204,19 +219,14 @@ def reward_fn(diagram: Diagram, context: Context) -> float:
 
     # Heel collision
     knee_frames = [
-        plant.GetFrameByName('FL_foot_fixed_parent'),
-        plant.GetFrameByName('FR_foot_fixed_parent'),
-        plant.GetFrameByName('RL_foot_fixed_parent'),
-        plant.GetFrameByName('RR_foot_fixed_parent')
+        plant.GetFrameByName('FL_calf_joint_parent'),
+        plant.GetFrameByName('FR_calf_joint_parent'),
+        plant.GetFrameByName('RL_calf_joint_parent'),
+        plant.GetFrameByName('RR_calf_joint_parent')
     ]
     for knee_frame in knee_frames:
-        p_knee = plant.CalcPointsPositions(
-            plant_context,
-            knee_frame,
-            [0,0,0],
-            plant.world_frame(),
-        )
-        if p_knee[2] < 0.1:
+        p_WKnee = knee_frame.CalcPoseInWorld(plant_context).translation()
+        if p_WKnee[2] < 0.1:
             reward += -time_step
 
     return reward
@@ -228,6 +238,10 @@ if __name__ == '__main__':
     diagram, plant, a1 = make_a1_diagram(meshcat=meshcat)
 
     diagram_context = diagram.CreateDefaultContext()
+    plant_context = plant.GetMyContextFromRoot(diagram_context)
+    trunk = plant.GetBodyByName('trunk')
+
+    V_WT = trunk.body_frame().CalcSpatialVelocity(plant_context, trunk.body_frame(), trunk.body_frame()).translational()
 
     input_port = diagram.get_input_port(0)
     input_port.FixValue(diagram_context, np.zeros(plant.num_actuators()))

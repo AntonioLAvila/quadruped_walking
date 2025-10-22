@@ -9,4 +9,4 @@ standing_torque = [-0.02848178, 0.43561059, 4.29359326, -0.02848178, 0.38919193,
 
 time_step = 0.005
 
-torque_scaler = 10
+torque_scaler = 13
