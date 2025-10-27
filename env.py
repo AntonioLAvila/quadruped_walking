@@ -138,7 +138,6 @@ def make_gym_env(
         dtype=np.float64
     )
 
-
     env = DrakeGymEnv(
         simulator=make_sim_maker(meshcat),
         time_step=time_step,
@@ -165,13 +164,13 @@ def make_simulation_maker(meshcat: Meshcat = None):
     def simulation_factory(generator: RandomGenerator) -> Simulator:
         diagram, plant, _ = make_a1_diagram(meshcat=meshcat)
         simulator = Simulator(diagram)
-        context = simulator.get_mutable_context()
-        plant_context = plant.GetMyContextFromRoot(context)
-        plant.SetPositions(plant_context, A1_q0)
-        plant.SetVelocities(plant_context, np.zeros(plant.num_velocities()))
-        diagram.get_input_port(0).FixValue(context, np.zeros(plant.num_actuators()))
+        # context = simulator.get_mutable_context()
+        # plant_context = plant.GetMyContextFromRoot(context)
+        # plant.SetPositions(plant_context, A1_q0)
+        # plant.SetVelocities(plant_context, np.zeros(plant.num_velocities()))
+        # diagram.get_input_port(0).FixValue(context, np.zeros(plant.num_actuators()))
         simulator.set_monitor(make_termination_conditions(diagram))
-        simulator.get_system().SetDefaultContext(context)
+        # simulator.get_system().SetDefaultContext(context)
 
         return simulator
     
@@ -239,9 +238,6 @@ if __name__ == '__main__':
 
     diagram_context = diagram.CreateDefaultContext()
     plant_context = plant.GetMyContextFromRoot(diagram_context)
-
-    plant.SetPositions(plant_context, A1_q0)
-    plant.SetVelocities(plant_context, np.zeros(plant.num_velocities()))
 
     input_port = diagram.get_input_port(0)
     input_port.FixValue(diagram_context, np.zeros(plant.num_actuators()))
