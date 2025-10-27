@@ -18,13 +18,19 @@ from pydrake.all import (
     LeafSystem,
     BasicVector,
     namedview,
-    EventStatus
+    EventStatus,
+    InputPortIndex,
+    OutputPortIndex,
+    PortDataType,
+    OutputPort,
+    InputPort
 )
 import numpy as np
 from pydrake.gym import DrakeGymEnv
 from gymnasium.spaces import Box
 from util import A1_q0, time_step, torque_scale
-from typing import Callable, Optional
+from typing import Callable, Optional, Type
+from gymnasium import Env
 
 
 class ObservationExtractor(LeafSystem):
@@ -60,6 +66,7 @@ class TorqueMultiplier(LeafSystem):
 
 
 def make_a1_diagram(
+    obs_extractor: Type[ObservationExtractor],
     static_friction=1.0, # rubber on concrete
     dynamic_friction=0.8,
     meshcat: Meshcat = None
@@ -90,7 +97,7 @@ def make_a1_diagram(
     # wire up observation/actuation
     torque_multiplier = TorqueMultiplier(plant, scale=torque_scale)
     builder.AddNamedSystem('torque_multiplier', torque_multiplier)
-    observation_extractor = ObservationExtractor(plant)
+    observation_extractor = obs_extractor(plant)
     builder.AddNamedSystem('observation_extractor', observation_extractor)
 
     builder.Connect(torque_multiplier.output_port, plant.get_actuation_input_port())
@@ -118,7 +125,7 @@ def make_gym_env(
     if visualize:
         meshcat = StartMeshcat()
 
-    _, plant, _ = make_a1_diagram()
+    _, plant, _ = make_a1_diagram(ObservationExtractor)
 
     action_space = Box(
         low=plant.GetEffortLowerLimits(),
@@ -149,92 +156,192 @@ def make_gym_env(
 
     return env, meshcat
 
-def make_termination_conditions(diagram: Diagram):
-    # TODO do this correctly
-    def termination_conditions(context: Context):
-        if context.get_time() > 10:
-            return EventStatus.ReachedTermination(diagram, 'time limit')
-        return EventStatus.Succeeded()
-    return termination_conditions
 
-# TODO randomize stuff for a robust controller
-# NOTE should not be implemented for final project
-def make_simulation_maker(meshcat: Meshcat = None):
+class A1_Env(Env):
+    def __init__(
+        self,
+        observation_extractor: Type[ObservationExtractor],
+        time_step: float,
+        visualize: bool = False,
+    ):
+        super().__init__()
+        self.meshcat = None
+        if visualize:
+            self.meshcat: Meshcat = StartMeshcat()
+        self.observation_extractor = observation_extractor
+        self.action_port: InputPort = InputPortIndex(0)
+        self.observation_port: OutputPort = OutputPortIndex(0)
+        self.simulator: Simulator = None
+        self.generator: RandomGenerator = None
+        self.time_step = time_step
 
-    def simulation_factory(generator: RandomGenerator) -> Simulator:
-        diagram, plant, _ = make_a1_diagram(meshcat=meshcat)
+    def simulation_factory(self, generator: RandomGenerator) -> Simulator:
+        diagram, _, _ = make_a1_diagram(ObservationExtractor, meshcat=meshcat)
         simulator = Simulator(diagram)
-        # context = simulator.get_mutable_context()
-        # plant_context = plant.GetMyContextFromRoot(context)
-        # plant.SetPositions(plant_context, A1_q0)
-        # plant.SetVelocities(plant_context, np.zeros(plant.num_velocities()))
-        # diagram.get_input_port(0).FixValue(context, np.zeros(plant.num_actuators()))
-        simulator.set_monitor(make_termination_conditions(diagram))
-        # simulator.get_system().SetDefaultContext(context)
-
+        simulator.set_monitor(self.make_termination_conditions(diagram))
+        simulator.Initialize()
         return simulator
     
-    return simulation_factory
+    def _setup(self):
+        """Completes the setup once we have a self.simulator."""
+        system = self.simulator.get_system()
 
+        # Setup action port
+        if self.action_port.get_data_type() == PortDataType.kVectorValued:
+            assert np.array_equal(self.action_space.shape, [self.action_port.size()])
 
-def reward_fn(sim_diagram: Diagram, sim_context: Context) -> float:
-    # TODO make this good
-    plant: MultibodyPlant = sim_diagram.GetSubsystemByName('plant')
-    plant_context = plant.GetMyContextFromRoot(sim_context)
-    trunk = plant.GetBodyByName('trunk')
+        # Setup observation port
+        if self.observation_port.get_data_type() == PortDataType.kVectorValued:
+            assert np.array_equal(self.observation_space.shape, [self.observation_port.size()])
+        
+        def get_output_port(id):
+            if isinstance(id, OutputPortIndex):
+                return system.get_output_port(id)
+            return system.GetOutputPort(id)
 
-    state_view = namedview('state', plant.GetStateNames())
-    plant_state = plant.get_state_output_port().Eval(plant_context)
-    state = state_view(plant_state)
+        # Setup reward
+        if self.reward_port_id:
+            reward_port = get_output_port(self.reward_port_id)
+            self.reward = lambda system, context: reward_port.Eval(context)[0]
 
-    reward = 0
+    def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, any]:
+        '''
+        Takes an action and returns a tuple:
+        (observation, reward, terminated, truncated, info)
+        '''
+        assert self.simulator, "You must call reset() first"
 
-    # Linear velocity xy
-    v_xy_des = np.array([1.5, 0])
-    v_xy = np.array([state.a1_trunk_vx, state.a1_trunk_vy])
-    diff_v_xy = v_xy_des - v_xy
-    reward += 4 * np.exp(-np.dot(diff_v_xy, diff_v_xy)/0.25)
+        context = self.simulator.get_context()
+        time = context.get_time()
 
-    # Linear velocity z
-    reward += -1 * state.a1_trunk_vz**2
+        self.action_port.FixValue(context, action)
+        truncated = False
+        # Observation prior to advancing the simulation.
+        prev_observation = self.observation_port.Eval(context)
+        try:
+            status = self.simulator.AdvanceTo(time + self.time_step)
+        except RuntimeError as e:
+            # TODO(JoseBarreiros-TRI) We don't currently check for the
+            # error coming from the solver failing to converge.
+            warnings.warn("Calling Done after catching RuntimeError:")
+            warnings.warn(e.args[0])
+            # Truncated is used when the solver failed to converge.
+            # Note: this is different than the official use of truncated
+            # in Gymnasium:
+            # "Whether the truncation condition outside the scope of the MDP
+            # is satisfied. Typically, this is a timelimit, but
+            # could also be used to indicate an agent physically going out
+            # of bounds."
+            # We handle the solver failure to converge by returning
+            # zero reward and the previous observation since the action
+            # was not successfully applied. This comes at a cost of
+            # an extra evaluation of the observation port.
+            truncated = True
+            terminated = False
+            reward = 0
+            # Do not call info handler, as the simulator has faulted.
+            info = dict()
 
-    # Angular velocity xy
-    omega_xy = np.array([state.a1_trunk_wx, state.a1_trunk_wy])
-    reward += -0.05 * np.dot(omega_xy, omega_xy)
+            return prev_observation, reward, terminated, truncated, info
 
-    # Angular velocity z
-    reward += 0.5 * np.exp(-1 * state.a1_trunk_wz**2 / 0.25)
+        observation = self.observation_port.Eval(context)
+        reward = self.reward(self.simulator.get_system(), context)
+        terminated = (
+            not truncated
+            and (status.reason()
+                 == SimulatorStatus.ReturnReason.kReachedTerminationCondition))
+        info = self.info_handler(self.simulator)
 
-    # Orientation
-    R_WT = trunk.EvalPoseInWorld(plant_context).rotation()
-    world_z = np.array([0,0,1])
-    trunk_z = R_WT.col(2)
-    diff_o = world_z - trunk_z
-    reward += np.dot(diff_o, diff_o)
+        return observation, reward, terminated, truncated, info
 
-    # Torque
-    actuation = sim_diagram.get_input_port(0).Eval(sim_context)
-    reward += -1e-4 * np.dot(actuation, actuation)
+    def reset(self, *, seed: Optional[int] = None, option: Optional[dict] = None):
+        '''
+        returns a tuple: (observations, info)
+        '''
+        super.reset(seed=seed)
+        self.generator = RandomGenerator(seed)
+        self.simulator = self.simulation_factory(self.generator)
+        self._setup()
 
-    # Heel collision
-    heel_frames = [
-        plant.GetFrameByName('FL_calf_joint_parent'),
-        plant.GetFrameByName('FR_calf_joint_parent'),
-        plant.GetFrameByName('RL_calf_joint_parent'),
-        plant.GetFrameByName('RR_calf_joint_parent')
-    ]
-    for heel_frame in heel_frames:
-        p_WKnee = heel_frame.CalcPoseInWorld(plant_context).translation()
-        if p_WKnee[2] < 0.1:
-            reward += -0.5
+        context = self.simulator.get_mutable_context()
+        context.SetTime(0)
+        self.simulator.Initialize()
+        observations = self.observation_port.Eval(context)
 
-    return reward
+        return observations, dict()
+
+    def render(self):
+        assert self.simulator, 'call reset first'
+        self.simulator.get_system().ForcedPublish(self.simulator.get_context())
+        return
+    
+    def make_termination_conditions(self, diagram: Diagram):
+        # TODO do this correctly
+        def termination_conditions(context: Context):
+            if context.get_time() > 10:
+                return EventStatus.ReachedTermination(diagram, 'time limit')
+            return EventStatus.Succeeded()
+        return termination_conditions
+
+    def reward_fn(sim_diagram: Diagram, sim_context: Context) -> float:
+        # TODO make this good
+        plant: MultibodyPlant = sim_diagram.GetSubsystemByName('plant')
+        plant_context = plant.GetMyContextFromRoot(sim_context)
+        trunk = plant.GetBodyByName('trunk')
+
+        state_view = namedview('state', plant.GetStateNames())
+        plant_state = plant.get_state_output_port().Eval(plant_context)
+        state = state_view(plant_state)
+
+        reward = 0
+
+        # Linear velocity xy
+        v_xy_des = np.array([1.5, 0])
+        v_xy = np.array([state.a1_trunk_vx, state.a1_trunk_vy])
+        diff_v_xy = v_xy_des - v_xy
+        reward += 4 * np.exp(-np.dot(diff_v_xy, diff_v_xy)/0.25)
+
+        # Linear velocity z
+        reward += -1 * state.a1_trunk_vz**2
+
+        # Angular velocity xy
+        omega_xy = np.array([state.a1_trunk_wx, state.a1_trunk_wy])
+        reward += -0.05 * np.dot(omega_xy, omega_xy)
+
+        # Angular velocity z
+        reward += 0.5 * np.exp(-1 * state.a1_trunk_wz**2 / 0.25)
+
+        # Orientation
+        R_WT = trunk.EvalPoseInWorld(plant_context).rotation()
+        world_z = np.array([0,0,1])
+        trunk_z = R_WT.col(2)
+        diff_o = world_z - trunk_z
+        reward += np.dot(diff_o, diff_o)
+
+        # Torque
+        actuation = sim_diagram.get_input_port(0).Eval(sim_context)
+        reward += -1e-4 * np.dot(actuation, actuation)
+
+        # Heel collision
+        heel_frames = [
+            plant.GetFrameByName('FL_calf_joint_parent'),
+            plant.GetFrameByName('FR_calf_joint_parent'),
+            plant.GetFrameByName('RL_calf_joint_parent'),
+            plant.GetFrameByName('RR_calf_joint_parent')
+        ]
+        for heel_frame in heel_frames:
+            p_WKnee = heel_frame.CalcPoseInWorld(plant_context).translation()
+            if p_WKnee[2] < 0.1:
+                reward += -0.5
+
+        return reward
+
 
 
 if __name__ == '__main__':
     meshcat: Meshcat = StartMeshcat()
 
-    diagram, plant, a1 = make_a1_diagram(meshcat=meshcat)
+    diagram, plant, a1 = make_a1_diagram(ObservationExtractor, meshcat=meshcat)
 
     diagram_context = diagram.CreateDefaultContext()
     plant_context = plant.GetMyContextFromRoot(diagram_context)
