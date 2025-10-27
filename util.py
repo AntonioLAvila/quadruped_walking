@@ -10,4 +10,4 @@ standing_torque = np.array([-0.02848178, 0.43561059, 4.29359326, -0.02848178, 0.
 
 time_step = 0.005
 
-torque_scale = 10
+torque_scale = 33.5 + 10

@@ -21,36 +21,67 @@ from pydrake.all import (
     EventStatus,
     InputPortIndex,
     OutputPortIndex,
-    PortDataType,
-    OutputPort,
-    InputPort
+    SimulatorStatus
 )
 import numpy as np
-from pydrake.gym import DrakeGymEnv
 from gymnasium.spaces import Box
 from util import A1_q0, time_step, torque_scale
-from typing import Callable, Optional, Type
+from typing import Optional, Type
 from gymnasium import Env
+import warnings
 
 
 class ObservationExtractor(LeafSystem):
+    '''Base observation extractor class'''
+    obs_dim: Optional[int] = None
+    obs_lb: Optional[np.ndarray] = None
+    obs_ub: Optional[np.ndarray] = None
     def __init__(self, plant: MultibodyPlant):
         super().__init__()
-        # NOTE 12 joint positions, 3 body rotational velocities, 3 body translational, 12 joint velocities
-        # in that order
-        obs_dim = 12 + 12 + 3 + 3 
+        if not hasattr(self, "obs_dim"):
+            self.obs_dim = None
+        if not hasattr(self, "obs_lb"):
+            self.obs_lb = None
+        if not hasattr(self, "obs_ub"):
+            self.obs_ub = None
+
+        if self.obs_dim is None:
+            raise ValueError(f'{self.__class__.__name__} must define self.obs_dim before super().__init__()')
+        if self.obs_lb is None:
+            raise ValueError(f'{self.__class__.__name__} must define self.obs_lb')
+        if self.obs_ub is None:
+            raise ValueError(f'{self.__class__.__name__} must define self.obs_ub')
+        
         self.input_port = self.DeclareVectorInputPort('state', plant.num_multibody_states())
-        self.output_port = self.DeclareVectorOutputPort('observation', BasicVector(obs_dim), self.calc_obs)
+        self.output_port = self.DeclareVectorOutputPort('observation', BasicVector(self.obs_dim), self.calc_obs)
 
     def calc_obs(self, context: Context, output: BasicVector):
-        # TODO add noise argagrgagrgragargragragaargargarrgrggrag
+        raise NotImplementedError('Subclasses must implement calc_obs()')
+
+
+class BasicExtractor(ObservationExtractor):
+    def __init__(self, plant: MultibodyPlant):
+        # NOTE 12 joint positions, 3 body rotational velocities, 3 body translational, 12 joint velocities
+        # in that order
+        self.obs_dim = 12 + 12 + 3 + 3
+        self.obs_lb = np.concatenate((
+            plant.GetPositionLowerLimits()[7:],
+            plant.GetVelocityLowerLimits()
+        ))
+        self.obs_ub = np.concatenate((
+            plant.GetPositionUpperLimits()[7:],
+            plant.GetVelocityUpperLimits()
+        ))
+        super().__init__(plant)
+
+    def calc_obs(self, context: Context, output: BasicVector):
         x = self.get_input_port().Eval(context)
         obs = x[7:]
         output.SetFromVector(obs)
 
 
 class TorqueMultiplier(LeafSystem):
-    def __init__(self, plant: MultibodyPlant, scale=10):
+    def __init__(self, plant: MultibodyPlant, scale=33.5):
         super().__init__()
         self.scale = scale
         self.lower_limits = plant.GetEffortLowerLimits()
@@ -92,7 +123,7 @@ def make_a1_diagram(
     plant.Finalize()
 
     # set default position
-    plant.SetDefaultPositions(A1_q0)
+    plant.SetDefaultPositions(A1_q0.copy())
 
     # wire up observation/actuation
     torque_multiplier = TorqueMultiplier(plant, scale=torque_scale)
@@ -104,7 +135,7 @@ def make_a1_diagram(
     builder.Connect(plant.get_state_output_port(), observation_extractor.input_port)
 
     builder.ExportInput(torque_multiplier.input_port) # 12
-    builder.ExportOutput(observation_extractor.output_port) # 30
+    builder.ExportOutput(observation_extractor.output_port)
 
     # visualization options
     if meshcat is not None:
@@ -116,175 +147,119 @@ def make_a1_diagram(
     return diagram, plant, a1
 
 
-def make_gym_env(
-    reward_fn: Callable[[Diagram, Context], float],
-    make_sim_maker: Callable[[Optional[Meshcat]], Callable[[RandomGenerator], Simulator]],
-    visualize=False,
-) -> tuple[DrakeGymEnv, Optional[Meshcat]]:
-    meshcat = None
-    if visualize:
-        meshcat = StartMeshcat()
-
-    _, plant, _ = make_a1_diagram(ObservationExtractor)
-
-    action_space = Box(
-        low=plant.GetEffortLowerLimits(),
-        high=plant.GetEffortUpperLimits(),
-        dtype=np.float64
-    )
-
-    observation_space = Box(
-        low=np.concatenate((
-            plant.GetPositionLowerLimits()[7:],
-            plant.GetVelocityLowerLimits()
-        )),
-        high=np.concatenate((
-            plant.GetPositionUpperLimits()[7:],
-            plant.GetVelocityUpperLimits()
-        )),
-        dtype=np.float64
-    )
-
-    env = DrakeGymEnv(
-        simulator=make_sim_maker(meshcat),
-        time_step=time_step,
-        action_space=action_space,
-        observation_space=observation_space,
-        reward=reward_fn,
-        hardware=True
-    )
-
-    return env, meshcat
-
-
 class A1_Env(Env):
     def __init__(
         self,
         observation_extractor: Type[ObservationExtractor],
-        time_step: float,
+        time_step: float = 0.005,
         visualize: bool = False,
     ):
         super().__init__()
-        self.meshcat = None
-        if visualize:
-            self.meshcat: Meshcat = StartMeshcat()
-        self.observation_extractor = observation_extractor
-        self.action_port: InputPort = InputPortIndex(0)
-        self.observation_port: OutputPort = OutputPortIndex(0)
-        self.simulator: Simulator = None
-        self.generator: RandomGenerator = None
         self.time_step = time_step
+        self.generator = None  # Will be initialized on first reset
 
-    def simulation_factory(self, generator: RandomGenerator) -> Simulator:
-        diagram, _, _ = make_a1_diagram(ObservationExtractor, meshcat=meshcat)
-        simulator = Simulator(diagram)
-        simulator.set_monitor(self.make_termination_conditions(diagram))
-        simulator.Initialize()
-        return simulator
-    
-    def _setup(self):
-        """Completes the setup once we have a self.simulator."""
-        system = self.simulator.get_system()
-
-        # Setup action port
-        if self.action_port.get_data_type() == PortDataType.kVectorValued:
-            assert np.array_equal(self.action_space.shape, [self.action_port.size()])
-
-        # Setup observation port
-        if self.observation_port.get_data_type() == PortDataType.kVectorValued:
-            assert np.array_equal(self.observation_space.shape, [self.observation_port.size()])
+        self.meshcat = StartMeshcat() if visualize else None
         
-        def get_output_port(id):
-            if isinstance(id, OutputPortIndex):
-                return system.get_output_port(id)
-            return system.GetOutputPort(id)
+        self.diagram, self.plant, _ = make_a1_diagram(observation_extractor, meshcat=self.meshcat)
+        self.simulator = Simulator(self.diagram)
+        self.context = None
+        self.plant_context = None
 
-        # Setup reward
-        if self.reward_port_id:
-            reward_port = get_output_port(self.reward_port_id)
-            self.reward = lambda system, context: reward_port.Eval(context)[0]
+        self.action_port = self.diagram.get_input_port(InputPortIndex(0))
+        self.observation_port = self.diagram.get_output_port(OutputPortIndex(0))
+
+        self.action_space = Box(
+            low=np.full(self.plant.num_actuators(), -1.0),
+            high=np.full(self.plant.num_actuators(), 1.0),
+            dtype=np.float64
+        )
+
+        obs_ext: ObservationExtractor = self.diagram.GetSubsystemByName('observation_extractor')
+        self.observation_space = Box(
+            low=obs_ext.obs_lb,
+            high=obs_ext.obs_ub,
+            dtype=np.float64
+        )
+        
+        self.simulator.set_monitor(self.termination_conditions)
 
     def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, any]:
-        '''
-        Takes an action and returns a tuple:
-        (observation, reward, terminated, truncated, info)
-        '''
-        assert self.simulator, "You must call reset() first"
+        assert self.context, "You must call reset() first"
 
-        context = self.simulator.get_context()
-        time = context.get_time()
+        time = self.context.get_time()
 
-        self.action_port.FixValue(context, action)
+        self.action_port.FixValue(self.context, action)
         truncated = False
-        # Observation prior to advancing the simulation.
-        prev_observation = self.observation_port.Eval(context)
+        prev_observation = self.observation_port.Eval(self.context)
+        
         try:
             status = self.simulator.AdvanceTo(time + self.time_step)
         except RuntimeError as e:
-            # TODO(JoseBarreiros-TRI) We don't currently check for the
-            # error coming from the solver failing to converge.
             warnings.warn("Calling Done after catching RuntimeError:")
             warnings.warn(e.args[0])
-            # Truncated is used when the solver failed to converge.
-            # Note: this is different than the official use of truncated
-            # in Gymnasium:
-            # "Whether the truncation condition outside the scope of the MDP
-            # is satisfied. Typically, this is a timelimit, but
-            # could also be used to indicate an agent physically going out
-            # of bounds."
-            # We handle the solver failure to converge by returning
-            # zero reward and the previous observation since the action
-            # was not successfully applied. This comes at a cost of
-            # an extra evaluation of the observation port.
             truncated = True
             terminated = False
             reward = 0
-            # Do not call info handler, as the simulator has faulted.
             info = dict()
-
             return prev_observation, reward, terminated, truncated, info
 
-        observation = self.observation_port.Eval(context)
-        reward = self.reward(self.simulator.get_system(), context)
+        observation = self.observation_port.Eval(self.context)
+        reward = self.reward_fn(self.diagram, self.context)
         terminated = (
             not truncated
             and (status.reason()
-                 == SimulatorStatus.ReturnReason.kReachedTerminationCondition))
-        info = self.info_handler(self.simulator)
+                == SimulatorStatus.ReturnReason.kReachedTerminationCondition))
+        info = self.info_handler()
 
         return observation, reward, terminated, truncated, info
 
     def reset(self, *, seed: Optional[int] = None, option: Optional[dict] = None):
-        '''
-        returns a tuple: (observations, info)
-        '''
-        super.reset(seed=seed)
-        self.generator = RandomGenerator(seed)
-        self.simulator = self.simulation_factory(self.generator)
-        self._setup()
+        super().reset(seed=seed)
+        if seed is not None:
+            self.generator = np.random.default_rng(seed)
+        elif self.generator is None:
+            self.generator = np.random.default_rng()
 
-        context = self.simulator.get_mutable_context()
-        context.SetTime(0)
+        fresh_context = self.diagram.CreateDefaultContext()
+        plant_context = self.plant.GetMyContextFromRoot(fresh_context)
+        
+        fresh_context.SetTime(0.)
+
+        initial_positions = A1_q0.copy()
+        position_noise = self.generator.uniform(-0.05, 0.05, self.plant.num_positions())
+        position_noise[:7] = 0  # No noise on the floating base
+        self.plant.SetPositions(plant_context, initial_positions + position_noise)
+        self.plant.SetVelocities(plant_context, np.zeros(self.plant.num_velocities()))
+
+        self.simulator.reset_context(fresh_context)
+
+        self.context = self.simulator.get_mutable_context()
+        self.plant_context = self.plant.GetMyContextFromRoot(self.context)
+
         self.simulator.Initialize()
-        observations = self.observation_port.Eval(context)
 
-        return observations, dict()
+        # Get the initial observation
+        observations = self.observation_port.Eval(self.context)
+        info = self.info_handler()
+
+        return observations, info
+
+    def info_handler(self) -> dict:
+        return dict()
 
     def render(self):
         assert self.simulator, 'call reset first'
-        self.simulator.get_system().ForcedPublish(self.simulator.get_context())
+        self.diagram.ForcedPublish(self.context)
         return
     
-    def make_termination_conditions(self, diagram: Diagram):
-        # TODO do this correctly
-        def termination_conditions(context: Context):
-            if context.get_time() > 10:
-                return EventStatus.ReachedTermination(diagram, 'time limit')
-            return EventStatus.Succeeded()
-        return termination_conditions
+    # TODO do this
+    def termination_conditions(self, context: Context):
+        if context.get_time() > 10:
+            return EventStatus.ReachedTermination(self.diagram, 'time limit')
+        return EventStatus.Succeeded()
 
-    def reward_fn(sim_diagram: Diagram, sim_context: Context) -> float:
-        # TODO make this good
+    # TODO make this good
+    def reward_fn(self, sim_diagram: Diagram, sim_context: Context) -> float:
         plant: MultibodyPlant = sim_diagram.GetSubsystemByName('plant')
         plant_context = plant.GetMyContextFromRoot(sim_context)
         trunk = plant.GetBodyByName('trunk')
@@ -336,12 +311,10 @@ class A1_Env(Env):
 
         return reward
 
-
-
 if __name__ == '__main__':
     meshcat: Meshcat = StartMeshcat()
 
-    diagram, plant, a1 = make_a1_diagram(ObservationExtractor, meshcat=meshcat)
+    diagram, plant, a1 = make_a1_diagram(BasicExtractor, meshcat=meshcat)
 
     diagram_context = diagram.CreateDefaultContext()
     plant_context = plant.GetMyContextFromRoot(diagram_context)

@@ -1,17 +1,17 @@
-from env import make_simulation_maker, reward_fn, make_gym_env
+from env import A1_Env, BasicExtractor
 from stable_baselines3 import PPO
 from argparse import ArgumentParser
 
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--num_steps', type=int, required=True)
-    parser.add_argument('--model_path', type=str, required=True)
-    parser.add_argument('--visualize', type=bool, required=False, default=False)
+    parser.add_argument('--num_steps', type=int, required=False, default=1000000)
+    parser.add_argument('--model_path', type=str, required=False, default='buh')
+    parser.add_argument('--visualize', type=bool, required=False, default=True)
     args = parser.parse_args()
     args = vars(args)
 
-    env, meshcat = make_gym_env(reward_fn, make_simulation_maker, visualize=args['visualize'])
+    env = A1_Env(BasicExtractor, visualize=args['visualize'])
        
     model = PPO('MlpPolicy', env, verbose=1)
 
