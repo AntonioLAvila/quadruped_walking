@@ -24,27 +24,60 @@ import numpy as np
 from pydrake.gym import DrakeGymEnv
 from gymnasium.spaces import Box
 from util import A1_q0, time_step, torque_scale
-from typing import Callable, Optional
+from typing import Callable, Optional, Type
 
 
 class ObservationExtractor(LeafSystem):
+    '''Base observation extractor class'''
+    obs_dim: Optional[int] = None
+    obs_lb: Optional[np.ndarray] = None
+    obs_ub: Optional[np.ndarray] = None
     def __init__(self, plant: MultibodyPlant):
         super().__init__()
-        # NOTE 12 joint positions, 3 body rotational velocities, 3 body translational, 12 joint velocities
-        # in that order
-        obs_dim = 12 + 12 + 3 + 3 
+        if not hasattr(self, "obs_dim"):
+            self.obs_dim = None
+        if not hasattr(self, "obs_lb"):
+            self.obs_lb = None
+        if not hasattr(self, "obs_ub"):
+            self.obs_ub = None
+
+        if self.obs_dim is None:
+            raise ValueError(f'{self.__class__.__name__} must define self.obs_dim before super().__init__()')
+        if self.obs_lb is None:
+            raise ValueError(f'{self.__class__.__name__} must define self.obs_lb')
+        if self.obs_ub is None:
+            raise ValueError(f'{self.__class__.__name__} must define self.obs_ub')
+        
         self.input_port = self.DeclareVectorInputPort('state', plant.num_multibody_states())
-        self.output_port = self.DeclareVectorOutputPort('observation', BasicVector(obs_dim), self.calc_obs)
+        self.output_port = self.DeclareVectorOutputPort('observation', BasicVector(self.obs_dim), self.calc_obs)
 
     def calc_obs(self, context: Context, output: BasicVector):
-        # TODO add noise argagrgagrgragargragragaargargarrgrggrag
+        raise NotImplementedError('Subclasses must implement calc_obs()')
+
+
+class BasicExtractor(ObservationExtractor):
+    def __init__(self, plant: MultibodyPlant):
+        # NOTE 12 joint positions, 3 body rotational velocities, 3 body translational, 12 joint velocities
+        # in that order
+        self.obs_dim = 12 + 12 + 3 + 3
+        self.obs_lb = np.concatenate((
+            plant.GetPositionLowerLimits()[7:],
+            plant.GetVelocityLowerLimits()
+        ))
+        self.obs_ub = np.concatenate((
+            plant.GetPositionUpperLimits()[7:],
+            plant.GetVelocityUpperLimits()
+        ))
+        super().__init__(plant)
+
+    def calc_obs(self, context: Context, output: BasicVector):
         x = self.get_input_port().Eval(context)
         obs = x[7:]
         output.SetFromVector(obs)
 
 
 class TorqueMultiplier(LeafSystem):
-    def __init__(self, plant: MultibodyPlant, scale=10):
+    def __init__(self, plant: MultibodyPlant, scale=33.5):
         super().__init__()
         self.scale = scale
         self.lower_limits = plant.GetEffortLowerLimits()
@@ -60,6 +93,7 @@ class TorqueMultiplier(LeafSystem):
 
 
 def make_a1_diagram(
+    obs_extractor: Type[ObservationExtractor],
     static_friction=1.0, # rubber on concrete
     dynamic_friction=0.8,
     meshcat: Meshcat = None
@@ -85,19 +119,19 @@ def make_a1_diagram(
     plant.Finalize()
 
     # set default position
-    plant.SetDefaultPositions(A1_q0)
+    plant.SetDefaultPositions(A1_q0.copy())
 
     # wire up observation/actuation
     torque_multiplier = TorqueMultiplier(plant, scale=torque_scale)
     builder.AddNamedSystem('torque_multiplier', torque_multiplier)
-    observation_extractor = ObservationExtractor(plant)
+    observation_extractor = obs_extractor(plant)
     builder.AddNamedSystem('observation_extractor', observation_extractor)
 
     builder.Connect(torque_multiplier.output_port, plant.get_actuation_input_port())
     builder.Connect(plant.get_state_output_port(), observation_extractor.input_port)
 
     builder.ExportInput(torque_multiplier.input_port) # 12
-    builder.ExportOutput(observation_extractor.output_port) # 30
+    builder.ExportOutput(observation_extractor.output_port)
 
     # visualization options
     if meshcat is not None:
@@ -118,7 +152,7 @@ def make_gym_env(
     if visualize:
         meshcat = StartMeshcat()
 
-    _, plant, _ = make_a1_diagram()
+    _, plant, _ = make_a1_diagram(BasicExtractor)
 
     action_space = Box(
         low=plant.GetEffortLowerLimits(),
@@ -234,7 +268,7 @@ def reward_fn(sim_diagram: Diagram, sim_context: Context) -> float:
 if __name__ == '__main__':
     meshcat: Meshcat = StartMeshcat()
 
-    diagram, plant, a1 = make_a1_diagram(meshcat=meshcat)
+    diagram, plant, a1 = make_a1_diagram(BasicExtractor, meshcat=meshcat)
 
     diagram_context = diagram.CreateDefaultContext()
     plant_context = plant.GetMyContextFromRoot(diagram_context)
