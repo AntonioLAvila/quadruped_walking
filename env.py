@@ -17,12 +17,13 @@ from pydrake.all import (
     RandomGenerator,
     LeafSystem,
     BasicVector,
-    AddFrameTriadIllustration
+    namedview,
+    EventStatus
 )
 import numpy as np
 from pydrake.gym import DrakeGymEnv
 from gymnasium.spaces import Box
-from util import A1_q0, standing_torque, time_step, torque_scaler
+from util import A1_q0, time_step, torque_scale
 from typing import Callable, Optional
 
 
@@ -31,7 +32,6 @@ class ObservationExtractor(LeafSystem):
         super().__init__()
         # NOTE 12 joint positions, 3 body rotational velocities, 3 body translational, 12 joint velocities
         # in that order
-        # TODO maybe add gravity in the body frame
         obs_dim = 12 + 12 + 3 + 3 
         self.input_port = self.DeclareVectorInputPort('state', plant.num_multibody_states())
         self.output_port = self.DeclareVectorOutputPort('observation', BasicVector(obs_dim), self.calc_obs)
@@ -60,12 +60,12 @@ class TorqueMultiplier(LeafSystem):
 
 
 def make_a1_diagram(
-    static_friction=1.0,
-    dynamic_friction=1.0,
+    static_friction=1.0, # rubber on concrete
+    dynamic_friction=0.8,
     meshcat: Meshcat = None
 ) -> tuple[Diagram, MultibodyPlant, ModelInstanceIndex]:
     builder = DiagramBuilder()
-    plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=1e-4)
+    plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=time_step)
     plant: MultibodyPlant = plant
     scene_graph: SceneGraph = scene_graph
     parser = Parser(plant, scene_graph)
@@ -88,7 +88,7 @@ def make_a1_diagram(
     plant.SetDefaultPositions(A1_q0)
 
     # wire up observation/actuation
-    torque_multiplier = TorqueMultiplier(plant, scale=torque_scaler)
+    torque_multiplier = TorqueMultiplier(plant, scale=torque_scale)
     builder.AddNamedSystem('torque_multiplier', torque_multiplier)
     observation_extractor = ObservationExtractor(plant)
     builder.AddNamedSystem('observation_extractor', observation_extractor)
@@ -98,14 +98,6 @@ def make_a1_diagram(
 
     builder.ExportInput(torque_multiplier.input_port) # 12
     builder.ExportOutput(observation_extractor.output_port) # 30
-
-
-    # frames for debug
-    # AddFrameTriadIllustration(
-    #     scene_graph=scene_graph,
-    #     frame=plant.GetFrameByName('FL_calf_joint_parent')
-    # )
-
 
     # visualization options
     if meshcat is not None:
@@ -146,88 +138,96 @@ def make_gym_env(
         dtype=np.float64
     )
 
+
     env = DrakeGymEnv(
         simulator=make_sim_maker(meshcat),
         time_step=time_step,
         action_space=action_space,
         observation_space=observation_space,
-        reward=reward_fn
+        reward=reward_fn,
+        hardware=True
     )
 
     return env, meshcat
 
+def make_termination_conditions(diagram: Diagram):
+    # TODO do this correctly
+    def termination_conditions(context: Context):
+        if context.get_time() > 10:
+            return EventStatus.ReachedTermination(diagram, 'time limit')
+        return EventStatus.Succeeded()
+    return termination_conditions
 
+# TODO randomize stuff for a robust controller
+# NOTE should not be implemented for final project
 def make_simulation_maker(meshcat: Meshcat = None):
 
     def simulation_factory(generator: RandomGenerator) -> Simulator:
-        diagram, _, _ = make_a1_diagram(meshcat=meshcat)
+        diagram, plant, _ = make_a1_diagram(meshcat=meshcat)
         simulator = Simulator(diagram)
-        # TODO randomize stuff agraagaragragragragragragrgragragra
+        context = simulator.get_mutable_context()
+        plant_context = plant.GetMyContextFromRoot(context)
+        plant.SetPositions(plant_context, A1_q0)
+        plant.SetVelocities(plant_context, np.zeros(plant.num_velocities()))
+        diagram.get_input_port(0).FixValue(context, np.zeros(plant.num_actuators()))
+        simulator.set_monitor(make_termination_conditions(diagram))
+        simulator.get_system().SetDefaultContext(context)
+
         return simulator
     
     return simulation_factory
 
 
-def reward_fn(diagram: Diagram, context: Context) -> float:
+def reward_fn(sim_diagram: Diagram, sim_context: Context) -> float:
     # TODO make this good
-    plant: MultibodyPlant = diagram.GetSubsystemByName('plant')
-    plant_context = plant.GetMyContextFromRoot(context)
+    plant: MultibodyPlant = sim_diagram.GetSubsystemByName('plant')
+    plant_context = plant.GetMyContextFromRoot(sim_context)
     trunk = plant.GetBodyByName('trunk')
 
-    X_WT = trunk.EvalPoseInWorld(plant_context)
-    R_WT = X_WT.rotation()
-    p_WT = X_WT.translation()
-    V_WT = trunk.EvalSpatialVelocityInWorld(plant_context)
-    # V_WT = trunk.body_frame().CalcSpatialVelocity(plant_context, trunk.body_frame(), trunk.body_frame())
-    v_WT = V_WT.translational()
-    omega_WT = V_WT.rotational()
-    actuation = diagram.get_input_port(0).Eval(context)
-    joint_positions = plant.GetPositions(plant_context)[7:]
+    state_view = namedview('state', plant.GetStateNames())
+    plant_state = plant.get_state_output_port().Eval(plant_context)
+    state = state_view(plant_state)
 
     reward = 0
 
-    # Linear velocity
+    # Linear velocity xy
     v_xy_des = np.array([1.5, 0])
-    v_xy = v_WT[:2]
+    v_xy = np.array([state.a1_trunk_vx, state.a1_trunk_vy])
     diff_v_xy = v_xy_des - v_xy
-    reward += 2 * time_step * np.exp(-np.dot(diff_v_xy, diff_v_xy)/0.25)
+    reward += 4 * np.exp(-np.dot(diff_v_xy, diff_v_xy)/0.25)
 
-    p_z = p_WT[2]
-    diff_p_z = (0.3 - p_z)
-    reward += -time_step * np.dot(diff_p_z, diff_p_z)
-    # reward += -2 * time_step * v_z**2
+    # Linear velocity z
+    reward += -1 * state.a1_trunk_vz**2
 
-    # Angular velocity
-    omega_xy = omega_WT[:2]
-    reward += -0.05 * time_step * np.dot(omega_xy, omega_xy)
+    # Angular velocity xy
+    omega_xy = np.array([state.a1_trunk_wx, state.a1_trunk_wy])
+    reward += -0.05 * np.dot(omega_xy, omega_xy)
 
-    omega_z = omega_WT[2]
-    reward += 0.5 * time_step * np.exp(-1 * omega_z**2 / 0.25)
+    # Angular velocity z
+    reward += 0.5 * np.exp(-1 * state.a1_trunk_wz**2 / 0.25)
 
     # Orientation
+    R_WT = trunk.EvalPoseInWorld(plant_context).rotation()
     world_z = np.array([0,0,1])
     trunk_z = R_WT.col(2)
     diff_o = world_z - trunk_z
-    reward += -time_step * np.dot(diff_o, diff_o)
+    reward += np.dot(diff_o, diff_o)
 
     # Torque
-    # reward += -2e-4 * np.dot(actuation, actuation)
-
-    # Joint positions
-    for q, q_des in zip(joint_positions, A1_q0[7:]):
-        reward += -time_step * (q_des - q)
+    actuation = sim_diagram.get_input_port(0).Eval(sim_context)
+    reward += -1e-4 * np.dot(actuation, actuation)
 
     # Heel collision
-    knee_frames = [
+    heel_frames = [
         plant.GetFrameByName('FL_calf_joint_parent'),
         plant.GetFrameByName('FR_calf_joint_parent'),
         plant.GetFrameByName('RL_calf_joint_parent'),
         plant.GetFrameByName('RR_calf_joint_parent')
     ]
-    for knee_frame in knee_frames:
-        p_WKnee = knee_frame.CalcPoseInWorld(plant_context).translation()
+    for heel_frame in heel_frames:
+        p_WKnee = heel_frame.CalcPoseInWorld(plant_context).translation()
         if p_WKnee[2] < 0.1:
-            reward += -time_step
+            reward += -0.5
 
     return reward
 
@@ -239,9 +239,9 @@ if __name__ == '__main__':
 
     diagram_context = diagram.CreateDefaultContext()
     plant_context = plant.GetMyContextFromRoot(diagram_context)
-    trunk = plant.GetBodyByName('trunk')
 
-    V_WT = trunk.body_frame().CalcSpatialVelocity(plant_context, trunk.body_frame(), trunk.body_frame()).translational()
+    plant.SetPositions(plant_context, A1_q0)
+    plant.SetVelocities(plant_context, np.zeros(plant.num_velocities()))
 
     input_port = diagram.get_input_port(0)
     input_port.FixValue(diagram_context, np.zeros(plant.num_actuators()))

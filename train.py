@@ -12,7 +12,7 @@ if __name__ == '__main__':
     args = vars(args)
 
     env, meshcat = make_gym_env(reward_fn, make_simulation_maker, visualize=args['visualize'])
-   
+       
     model = PPO('MlpPolicy', env, verbose=1)
 
     model.learn(total_timesteps=args['num_steps'], progress_bar=True)
