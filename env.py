@@ -19,16 +19,17 @@ from pydrake.all import (
     BasicVector,
     namedview,
     EventStatus,
-    InputPortIndex,
-    OutputPortIndex,
-    SimulatorStatus
+    SimulatorStatus,
+    RigidTransform,
+    RotationMatrix
 )
 import numpy as np
 from gymnasium.spaces import Box
-from util import A1_q0, time_step, torque_scale
+from util import A1_q0, time_step, torque_scale, time_limit, speed
 from typing import Optional, Type
 from gymnasium import Env
 import warnings
+from robot_descriptions import a1_description
 
 
 class ObservationExtractor(LeafSystem):
@@ -108,8 +109,10 @@ def make_a1_diagram(
     scene_graph: SceneGraph = scene_graph
     parser = Parser(plant, scene_graph)
 
-    # add a1
-    a1 = parser.AddModels('assets/a1.urdf')[0]
+    # add a1 (somewhat official from mujoco menagerie)
+    # a1 = parser.AddModels('assets/a1.urdf')[0]
+    parser.package_map().Add('a1_description', a1_description.PACKAGE_PATH)
+    a1 = parser.AddModels(a1_description.URDF_PATH)[0]
 
     # register floor
     plant.RegisterCollisionGeometry(
@@ -124,6 +127,7 @@ def make_a1_diagram(
 
     # set default position
     plant.SetDefaultPositions(A1_q0.copy())
+    plant.SetDefaultFreeBodyPose(plant.GetBodyByName('base'), RigidTransform(RotationMatrix.Identity(), A1_q0[4:7]))
 
     # wire up observation/actuation
     torque_multiplier = TorqueMultiplier(plant, scale=torque_scale)
@@ -140,7 +144,7 @@ def make_a1_diagram(
     # visualization options
     if meshcat is not None:
         MeshcatVisualizer.AddToBuilder(builder, scene_graph, meshcat)
-        ContactVisualizer.AddToBuilder(builder, plant, meshcat)
+        # ContactVisualizer.AddToBuilder(builder, plant, meshcat)
 
     diagram = builder.Build()
 
@@ -151,7 +155,6 @@ class A1_Env(Env):
     def __init__(
         self,
         observation_extractor: Type[ObservationExtractor],
-        time_step: float = 0.005,
         visualize: bool = False,
     ):
         super().__init__()
@@ -161,12 +164,13 @@ class A1_Env(Env):
         self.meshcat = StartMeshcat() if visualize else None
         
         self.diagram, self.plant, _ = make_a1_diagram(observation_extractor, meshcat=self.meshcat)
+        self.state_view = namedview('state', self.plant.GetStateNames())
         self.simulator = Simulator(self.diagram)
         self.context = None
         self.plant_context = None
 
-        self.action_port = self.diagram.get_input_port(InputPortIndex(0))
-        self.observation_port = self.diagram.get_output_port(OutputPortIndex(0))
+        self.action_port = self.diagram.get_input_port(0)
+        self.observation_port = self.diagram.get_output_port(0)
 
         self.action_space = Box(
             low=np.full(self.plant.num_actuators(), -1.0),
@@ -182,36 +186,6 @@ class A1_Env(Env):
         )
         
         self.simulator.set_monitor(self.termination_conditions)
-
-    def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, any]:
-        assert self.context, "You must call reset() first"
-
-        time = self.context.get_time()
-
-        self.action_port.FixValue(self.context, action)
-        truncated = False
-        prev_observation = self.observation_port.Eval(self.context)
-        
-        try:
-            status = self.simulator.AdvanceTo(time + self.time_step)
-        except RuntimeError as e:
-            warnings.warn("Calling Done after catching RuntimeError:")
-            warnings.warn(e.args[0])
-            truncated = True
-            terminated = False
-            reward = 0
-            info = dict()
-            return prev_observation, reward, terminated, truncated, info
-
-        observation = self.observation_port.Eval(self.context)
-        reward = self.reward_fn(self.diagram, self.context)
-        terminated = (
-            not truncated
-            and (status.reason()
-                == SimulatorStatus.ReturnReason.kReachedTerminationCondition))
-        info = self.info_handler()
-
-        return observation, reward, terminated, truncated, info
 
     def reset(self, *, seed: Optional[int] = None, option: Optional[dict] = None):
         super().reset(seed=seed)
@@ -240,9 +214,40 @@ class A1_Env(Env):
 
         # Get the initial observation
         observations = self.observation_port.Eval(self.context)
+
         info = self.info_handler()
 
         return observations, info
+
+    def step(self, action: np.ndarray) -> tuple[np.ndarray, float, bool, bool, any]:
+        assert self.context, "You must call reset() first"
+
+        time = self.context.get_time()
+
+        self.action_port.FixValue(self.context, action)
+        truncated = False
+        prev_observation = self.observation_port.Eval(self.context)
+
+        try:
+            status = self.simulator.AdvanceTo(time + self.time_step)
+        except RuntimeError as e:
+            warnings.warn("Calling Done after catching RuntimeError:")
+            warnings.warn(e.args[0])
+            truncated = True
+            terminated = False
+            reward = 0
+            info = dict()
+            return prev_observation, reward, terminated, truncated, info
+
+        observation = self.observation_port.Eval(self.context)
+        reward = self.reward_fn(self.diagram, self.context)
+        terminated = (
+            not truncated
+            and (status.reason() == SimulatorStatus.ReturnReason.kReachedTerminationCondition)
+        )
+        info = self.info_handler()
+
+        return observation, reward, terminated, truncated, info
 
     def info_handler(self) -> dict:
         return dict()
@@ -254,8 +259,19 @@ class A1_Env(Env):
     
     # TODO do this
     def termination_conditions(self, context: Context):
-        if context.get_time() > 10:
+        if context.get_time() > time_limit:
             return EventStatus.ReachedTermination(self.diagram, 'time limit')
+        
+        plant_context = self.plant.GetMyContextFromRoot(context)
+        R_WT = self.plant.GetBodyByName('trunk').EvalPoseInWorld(plant_context).rotation()
+        cos_angle = np.dot(np.array([0,0,1]), R_WT.col(2))
+        if cos_angle < 0:
+            return EventStatus.ReachedTermination(self.diagram, 'bad orientation')
+        
+        p_WT = self.plant.GetBodyByName('trunk').EvalPoseInWorld(plant_context).translation()
+        if p_WT[2] < 0.2:
+            return EventStatus.ReachedTermination(self.diagram, 'too low')
+
         return EventStatus.Succeeded()
 
     # TODO make this good
@@ -264,40 +280,47 @@ class A1_Env(Env):
         plant_context = plant.GetMyContextFromRoot(sim_context)
         trunk = plant.GetBodyByName('trunk')
 
-        state_view = namedview('state', plant.GetStateNames())
         plant_state = plant.get_state_output_port().Eval(plant_context)
-        state = state_view(plant_state)
+        state = self.state_view(plant_state)
 
         reward = 0
 
         # Linear velocity xy
-        v_xy_des = np.array([1.5, 0])
-        v_xy = np.array([state.a1_trunk_vx, state.a1_trunk_vy])
+        velocity_weight = 2
+        v_xy_des = np.array([speed, 0])
+        v_xy = np.array([state.a1_base_vx, state.a1_base_vy])
         diff_v_xy = v_xy_des - v_xy
-        reward += 4 * np.exp(-np.dot(diff_v_xy, diff_v_xy)/0.25)
+        reward += velocity_weight * np.exp(-np.dot(diff_v_xy, diff_v_xy)/0.5)
 
         # Linear velocity z
-        reward += -1 * state.a1_trunk_vz**2
+        z_velocity_weight = -0.5
+        reward += z_velocity_weight * state.a1_base_vz**2
 
         # Angular velocity xy
-        omega_xy = np.array([state.a1_trunk_wx, state.a1_trunk_wy])
-        reward += -0.05 * np.dot(omega_xy, omega_xy)
+        xy_angulat_velocity_weight = -0.05
+        omega_xy = np.array([state.a1_base_wx, state.a1_base_wy])
+        reward += xy_angulat_velocity_weight * np.dot(omega_xy, omega_xy)
 
         # Angular velocity z
-        reward += 0.5 * np.exp(-1 * state.a1_trunk_wz**2 / 0.25)
+        z_angular_velocity_weight = -0.05
+        reward += z_angular_velocity_weight * state.a1_base_wz**2
 
         # Orientation
+        orientation_weight = -1.0
         R_WT = trunk.EvalPoseInWorld(plant_context).rotation()
         world_z = np.array([0,0,1])
         trunk_z = R_WT.col(2)
-        diff_o = world_z - trunk_z
-        reward += np.dot(diff_o, diff_o)
+        cos_angle = np.dot(world_z, trunk_z)
+        reward += orientation_weight * (1.0 - cos_angle)
 
         # Torque
+        torque_weight = -5e-2
         actuation = sim_diagram.get_input_port(0).Eval(sim_context)
-        reward += -1e-4 * np.dot(actuation, actuation)
+        reward += torque_weight * np.dot(actuation, actuation)
 
         # Heel collision
+        heel_clearance_height = -10
+        heel_clearance_weight = -1
         heel_frames = [
             plant.GetFrameByName('FL_calf_joint_parent'),
             plant.GetFrameByName('FR_calf_joint_parent'),
@@ -306,8 +329,36 @@ class A1_Env(Env):
         ]
         for heel_frame in heel_frames:
             p_WKnee = heel_frame.CalcPoseInWorld(plant_context).translation()
-            if p_WKnee[2] < 0.1:
-                reward += -0.5
+            if p_WKnee[2] < heel_clearance_height:
+                reward += heel_clearance_weight * (heel_clearance_height - p_WKnee[2])
+
+        # Foot air time
+        foot_frames = [
+            plant.GetFrameByName('FL_foot'),
+            plant.GetFrameByName('FR_foot'),
+            plant.GetFrameByName('RL_foot'),
+            plant.GetFrameByName('RR_foot')
+        ]
+        foot_clearance_penalty = 0
+        foot_min_clearance_height = 0.05
+        foot_clearance_weight = -5.0
+        for foot_frame in foot_frames:
+            p_WFoot = foot_frame.CalcPoseInWorld(plant_context).translation()
+            if p_WFoot[2] < foot_min_clearance_height:
+                foot_clearance_penalty += foot_clearance_weight * (foot_min_clearance_height - p_WFoot[2])
+        reward += foot_clearance_penalty
+
+        # Stance feet penalty
+        stance_penalty = 0
+        contact_threshold = 0.01
+        stance_weight = -0.1
+        for foot_frame in foot_frames:
+            p_WFoot = foot_frame.CalcPoseInWorld(plant_context).translation()
+            if p_WFoot[2] < contact_threshold:
+                V_WFoot = foot_frame.CalcSpatialVelocityInWorld(plant_context).translational()
+                v_xy_foot = V_WFoot[:2]
+                stance_penalty += stance_weight * np.dot(v_xy_foot, v_xy_foot)
+        reward += stance_penalty
 
         return reward
 
@@ -318,6 +369,8 @@ if __name__ == '__main__':
 
     diagram_context = diagram.CreateDefaultContext()
     plant_context = plant.GetMyContextFromRoot(diagram_context)
+
+    # print(plant.GetStateNames())
 
     input_port = diagram.get_input_port(0)
     input_port.FixValue(diagram_context, np.zeros(plant.num_actuators()))

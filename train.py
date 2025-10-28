@@ -5,9 +5,9 @@ from argparse import ArgumentParser
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--num_steps', type=int, required=False, default=1000000)
+    parser.add_argument('--num_steps', type=int, required=False, default=2000000)
     parser.add_argument('--model_path', type=str, required=False, default='buh')
-    parser.add_argument('--visualize', type=bool, required=False, default=True)
+    parser.add_argument('--visualize', type=bool, required=False, default=False)
     args = parser.parse_args()
     args = vars(args)
 
