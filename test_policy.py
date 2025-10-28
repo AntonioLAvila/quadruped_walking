@@ -10,7 +10,7 @@ import numpy as np
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--model_path', type=str, required=False, default='buh')
+    parser.add_argument('--model_path', type=str, required=False, default='buh/ppo_a1_final.zip')
     args = parser.parse_args()
     args = vars(args)
 
@@ -20,7 +20,6 @@ if __name__ == '__main__':
     model = PPO.load(args['model_path'], env=env)
 
     obs, _ = env.reset()
-    print(obs)
     
     while True:
         action, _ = model.predict(obs, deterministic=True)

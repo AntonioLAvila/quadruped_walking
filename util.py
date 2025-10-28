@@ -8,7 +8,7 @@ state_names = ['a1_base_qw', 'a1_base_qx', 'a1_base_qy', 'a1_base_qz', 'a1_base_
 
 standing_torque = np.array([-0.02848178, 0.43561059, 4.29359326, -0.02848178, 0.38919193, 4.41591229, -0.04882372, 0.23277197, 4.6992705, -0.04882372, 0.19840704, 4.79748208])
 
-time_step = 0.005
-time_limit = 20
+time_step = 0.01
+time_limit = 60**5
 speed = 1.0
-torque_scale = 33.5 + 10
+torque_scale = 10

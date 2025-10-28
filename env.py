@@ -172,9 +172,14 @@ class A1_Env(Env):
         self.action_port = self.diagram.get_input_port(0)
         self.observation_port = self.diagram.get_output_port(0)
 
+        # self.action_space = Box(
+        #     low=np.full(self.plant.num_actuators(), -1.0),
+        #     high=np.full(self.plant.num_actuators(), 1.0),
+        #     dtype=np.float64
+        # )
         self.action_space = Box(
-            low=np.full(self.plant.num_actuators(), -1.0),
-            high=np.full(self.plant.num_actuators(), 1.0),
+            low=np.ones(12)*-33.5,
+            high=np.ones(12)*33.5,
             dtype=np.float64
         )
 
@@ -186,6 +191,7 @@ class A1_Env(Env):
         )
         
         self.simulator.set_monitor(self.termination_conditions)
+        # self.simulator.set_target_realtime_rate(1.0) # NOTE this exists
 
     def reset(self, *, seed: Optional[int] = None, option: Optional[dict] = None):
         super().reset(seed=seed)
@@ -204,6 +210,8 @@ class A1_Env(Env):
         position_noise[:7] = 0  # No noise on the floating base
         self.plant.SetPositions(plant_context, initial_positions + position_noise)
         self.plant.SetVelocities(plant_context, np.zeros(self.plant.num_velocities()))
+
+        self.action_port.FixValue(fresh_context, np.zeros(12))
 
         self.simulator.reset_context(fresh_context)
 
@@ -224,6 +232,7 @@ class A1_Env(Env):
 
         time = self.context.get_time()
 
+        last_context = self.context.Clone()
         self.action_port.FixValue(self.context, action)
         truncated = False
         prev_observation = self.observation_port.Eval(self.context)
@@ -240,7 +249,8 @@ class A1_Env(Env):
             return prev_observation, reward, terminated, truncated, info
 
         observation = self.observation_port.Eval(self.context)
-        reward = self.reward_fn(self.diagram, self.context)
+        reward = self.reward_fn(self.diagram, self.context, last_context)
+        self.last_action = action
         terminated = (
             not truncated
             and (status.reason() == SimulatorStatus.ReturnReason.kReachedTerminationCondition)
@@ -265,62 +275,87 @@ class A1_Env(Env):
         plant_context = self.plant.GetMyContextFromRoot(context)
         R_WT = self.plant.GetBodyByName('trunk').EvalPoseInWorld(plant_context).rotation()
         cos_angle = np.dot(np.array([0,0,1]), R_WT.col(2))
-        if cos_angle < 0:
+        if cos_angle < 0.25:
             return EventStatus.ReachedTermination(self.diagram, 'bad orientation')
         
         p_WT = self.plant.GetBodyByName('trunk').EvalPoseInWorld(plant_context).translation()
-        if p_WT[2] < 0.2:
+        if p_WT[2] < 0.1:
             return EventStatus.ReachedTermination(self.diagram, 'too low')
 
         return EventStatus.Succeeded()
 
     # TODO make this good
-    def reward_fn(self, sim_diagram: Diagram, sim_context: Context) -> float:
+    def reward_fn(self, sim_diagram: Diagram, sim_context: Context, last_sim_context: Context) -> float:
         plant: MultibodyPlant = sim_diagram.GetSubsystemByName('plant')
         plant_context = plant.GetMyContextFromRoot(sim_context)
+        last_plant_context = plant.GetMyMutableContextFromRoot(last_sim_context)
         trunk = plant.GetBodyByName('trunk')
 
         plant_state = plant.get_state_output_port().Eval(plant_context)
         state = self.state_view(plant_state)
+        last_plant_state = plant.get_state_output_port().Eval(last_plant_context)
+        last_state = self.state_view(last_plant_state)
 
         reward = 0
 
         # Linear velocity xy
-        velocity_weight = 2
+        velocity_weight = 2.0
         v_xy_des = np.array([speed, 0])
         v_xy = np.array([state.a1_base_vx, state.a1_base_vy])
         diff_v_xy = v_xy_des - v_xy
-        reward += velocity_weight * np.exp(-np.dot(diff_v_xy, diff_v_xy)/0.5)
+        reward += velocity_weight * np.exp(-np.dot(diff_v_xy, diff_v_xy)/0.25)
 
         # Linear velocity z
-        z_velocity_weight = -0.5
+        z_velocity_weight = -2.0
         reward += z_velocity_weight * state.a1_base_vz**2
 
         # Angular velocity xy
-        xy_angulat_velocity_weight = -0.05
+        xy_angular_velocity_weight = -0.05
         omega_xy = np.array([state.a1_base_wx, state.a1_base_wy])
-        reward += xy_angulat_velocity_weight * np.dot(omega_xy, omega_xy)
+        reward += xy_angular_velocity_weight * np.dot(omega_xy, omega_xy)
 
         # Angular velocity z
-        z_angular_velocity_weight = -0.05
-        reward += z_angular_velocity_weight * state.a1_base_wz**2
+        z_angular_velocity_weight = 0.5
+        reward += z_angular_velocity_weight * np.exp(-state.a1_base_wz**2/0.25)
 
         # Orientation
         orientation_weight = -1.0
         R_WT = trunk.EvalPoseInWorld(plant_context).rotation()
-        world_z = np.array([0,0,1])
         trunk_z = R_WT.col(2)
-        cos_angle = np.dot(world_z, trunk_z)
-        reward += orientation_weight * (1.0 - cos_angle)
+        trunk_z_xy = trunk_z[:2]
+        reward += orientation_weight * np.dot(trunk_z_xy, trunk_z_xy)
 
         # Torque
-        torque_weight = -5e-2
+        torque_weight = -2e-4
         actuation = sim_diagram.get_input_port(0).Eval(sim_context)
         reward += torque_weight * np.dot(actuation, actuation)
 
+        # Joint acceleration
+        joint_acc_weight = -2.5e-8
+        reward += joint_acc_weight * np.square(last_state[-7:] - state[-7:]).sum()
+
+        # Action rate
+        action_rate_weight = -0.01
+        last_actuation = sim_diagram.get_input_port(0).Eval(last_sim_context)
+        reward += action_rate_weight * np.square(last_actuation - actuation).sum()
+
+        # # Foot air time
+        # foot_frames = [
+        #     plant.GetFrameByName('FL_foot'),
+        #     plant.GetFrameByName('FR_foot'),
+        #     plant.GetFrameByName('RL_foot'),
+        #     plant.GetFrameByName('RR_foot')
+        # ]
+        # foot_min_clearance_height = 0.05
+        # foot_clearance_weight = -5.0
+        # for foot_frame in foot_frames:
+        #     p_WFoot = foot_frame.CalcPoseInWorld(plant_context).translation()
+        #     if p_WFoot[2] < foot_min_clearance_height:
+        #         reward += foot_clearance_weight * (foot_min_clearance_height - p_WFoot[2])
+
         # Heel collision
-        heel_clearance_height = -10
-        heel_clearance_weight = -1
+        heel_clearance_height = 0.05
+        heel_clearance_weight = -2
         heel_frames = [
             plant.GetFrameByName('FL_calf_joint_parent'),
             plant.GetFrameByName('FR_calf_joint_parent'),
@@ -332,33 +367,15 @@ class A1_Env(Env):
             if p_WKnee[2] < heel_clearance_height:
                 reward += heel_clearance_weight * (heel_clearance_height - p_WKnee[2])
 
-        # Foot air time
-        foot_frames = [
-            plant.GetFrameByName('FL_foot'),
-            plant.GetFrameByName('FR_foot'),
-            plant.GetFrameByName('RL_foot'),
-            plant.GetFrameByName('RR_foot')
-        ]
-        foot_clearance_penalty = 0
-        foot_min_clearance_height = 0.05
-        foot_clearance_weight = -5.0
-        for foot_frame in foot_frames:
-            p_WFoot = foot_frame.CalcPoseInWorld(plant_context).translation()
-            if p_WFoot[2] < foot_min_clearance_height:
-                foot_clearance_penalty += foot_clearance_weight * (foot_min_clearance_height - p_WFoot[2])
-        reward += foot_clearance_penalty
-
-        # Stance feet penalty
-        stance_penalty = 0
-        contact_threshold = 0.01
-        stance_weight = -0.1
-        for foot_frame in foot_frames:
-            p_WFoot = foot_frame.CalcPoseInWorld(plant_context).translation()
-            if p_WFoot[2] < contact_threshold:
-                V_WFoot = foot_frame.CalcSpatialVelocityInWorld(plant_context).translational()
-                v_xy_foot = V_WFoot[:2]
-                stance_penalty += stance_weight * np.dot(v_xy_foot, v_xy_foot)
-        reward += stance_penalty
+        # # Stance feet penalty
+        # contact_threshold = 0.01
+        # stance_weight = -0.1
+        # for foot_frame in foot_frames:
+        #     p_WFoot = foot_frame.CalcPoseInWorld(plant_context).translation()
+        #     if p_WFoot[2] < contact_threshold:
+        #         V_WFoot = foot_frame.CalcSpatialVelocityInWorld(plant_context).translational()
+        #         v_xy_foot = V_WFoot[:2]
+        #         reward += stance_weight * np.dot(v_xy_foot, v_xy_foot)
 
         return reward
 
