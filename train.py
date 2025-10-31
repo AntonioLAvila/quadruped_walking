@@ -17,12 +17,12 @@ def train(args):
         vec_env_cls=SubprocVecEnv
     )
 
-    print(f"Training on {args.num_parallel_envs} envs\nSaving models to '{args.model_dir}'")
+    print(f"Training on {args.num_envs} envs\nSaving models to '{args.model_dir}'")
 
     eval_callback = EvalCallback(
         vec_env,
-        best_model_save_dir=args.model_dir,
-        log_dir=args.log_dir,
+        best_model_save_path=args.model_dir,
+        log_path=args.log_dir,
         eval_freq=args.eval_freq,
         n_eval_episodes=5,
         deterministic=True,
@@ -43,10 +43,15 @@ def train(args):
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--num_envs', type=int, required=True)
-    parser.add_argument('--num_steps', type=int, required=True)
-    parser.add_argument('--model_dir', type=str, required=True)
-    parser.add_argument('--log_dir', type=str, required=True)
+    # parser.add_argument('--num_envs', type=int, required=True)
+    # parser.add_argument('--num_steps', type=int, required=True)
+    # parser.add_argument('--model_dir', type=str, required=True)
+    # parser.add_argument('--log_dir', type=str, required=True)
+
+    parser.add_argument('--num_envs', type=int, required=False, default=4)
+    parser.add_argument('--num_steps', type=int, required=False, default=10_000_000)
+    parser.add_argument('--model_dir', type=str, required=False, default='buh')
+    parser.add_argument('--log_dir', type=str, required=False, default='buh')
 
     parser.add_argument('--seed', type=int, required=False, default=0)
     parser.add_argument('--eval_freq', type=int, required=False, default=100000000000) # TODO fix this

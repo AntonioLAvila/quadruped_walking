@@ -4,7 +4,7 @@ from robot_descriptions import a1_mj_description
 from gymnasium.envs.mujoco.mujoco_env import MujocoEnv
 from gymnasium.spaces import Box
 from typing import Optional
-from util import A1_joint_lb, A1_joint_ub, dt_control, dt_sim, A1_q0, default_cam_config
+from util import A1_joint_lb, A1_joint_ub, dt_control, dt_sim, A1_q0, default_cam_config, control_freq
 from copy import deepcopy
 from collections import deque
 
@@ -15,8 +15,10 @@ class ObservationExtractor():
     history_len: int = None
 
     def __init__(self):
-        if self.obs_ub is None:
+        if self.obs_space is None:
             raise ValueError(f'{self.__class__.__name__} must define self.obs_ub')
+        if self.history_len is None:
+            raise ValueError(f'{self.__class__.__name__} must define self.history_len')
 
     def calc_obs(self, mjdata, data_history: deque):
         # data_history is oldest to youngest
@@ -47,7 +49,7 @@ class A1_Env(MujocoEnv):
             'rgb_array',
             'depth_array'
         ],
-        'render_fps': 60
+        'render_fps': control_freq
     }
 
     def __init__(
@@ -81,7 +83,7 @@ class A1_Env(MujocoEnv):
         reward, reward_info = self._calc_reward(action)
         terminated, truncated = self._calc_term_trunc(action)
         info = {
-            'p_WTrunk': self.data.qpos[:3]
+            'p_WTrunk': self.data.qpos[:3],
             **reward_info
         }
 
