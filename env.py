@@ -13,7 +13,9 @@ from util import (
     dt_sim, A1_q0,
     default_cam_config,
     control_freq,
-    euler_from_quaternion
+    R_from_quat,
+    projected_gravity,
+    weights
 )
 
 
@@ -36,10 +38,10 @@ class ObservationExtractor():
 
 class BasicExtractor(ObservationExtractor):
     def __init__(self):
-        # o, q, v, w, qd
+        # orientation, joint pos, body spatial vel, body rotational vel, joint vel, g_proj
         self.obs_space = Box(
-            low=np.concatenate(([-1]*4, A1_joint_lb, [-np.inf]*18)),
-            high=np.concatenate(([1]*4, A1_joint_ub, [np.inf]*18)),
+            low=np.concatenate(([-1]*4, A1_joint_lb, [-np.inf]*18, [-1]*3)),
+            high=np.concatenate(([1]*4, A1_joint_ub, [np.inf]*18, [1]*3)),
             dtype=np.float64
         )
         self.history_len = 0
@@ -47,7 +49,8 @@ class BasicExtractor(ObservationExtractor):
 
     def calc_obs(self, mjdata, data_history: deque):
         o_and_q = mjdata.qpos[3:]
-        return np.concatenate((o_and_q, mjdata.qvel))
+        g_proj = projected_gravity(mjdata.qpos[3:7])
+        return np.concatenate((o_and_q, mjdata.qvel, g_proj))
 
 
 class A1_Env(MujocoEnv):
@@ -73,26 +76,32 @@ class A1_Env(MujocoEnv):
             default_camera_config=default_cam_config,
             **kwargs
         )
+        self.observation_extractor = observation_extractor
         self._max_episode_time = 30.0 # seconds
-        self._step = 0
-        self._last_render_time = -1.0
-
+        self._upright = np.array([0,0,1])
+        self._torque_scale = 1 # NOTE should maybe set to 10 idk we'll see
+        self._v_xy_desired = np.array([1,0])
+        self._desired_yaw_rate = 0.0
+        self._contact_indices = [2, 3, 5, 6, 8, 9, 11, 12]
         self._reset_rng = np.random.default_rng()
 
-        self.observation_extractor = observation_extractor
+        # stateful things
+        self._step = 0
+        self._last_render_time = -1.0
         self._history_len = self.observation_extractor.history_len
         self._data_history = deque(maxlen=self._history_len) # oldest to youngest
+        self._last_action = np.zeros(12) # NOTE this is seperate from _data_history because it's used only for reward calculation
         
     def step(self, action):
         self._step += 1 # update for keeping time
         self._data_history.append(deepcopy(self.data)) # update history
-        self.do_simulation(action, self.frame_skip)
+        self.do_simulation(action*self._torque_scale, self.frame_skip)
 
         obs = self.observation_extractor.calc_obs(self.data, self._data_history)
         reward, reward_info = self._calc_reward(action)
-        terminated, truncated = self._calc_term_trunc(action)
+        terminated, truncated = self._calc_term_trunc()
         info = {
-            'p_WTrunk': self.data.qpos[:3],
+            'p_WBody': self.data.qpos[:3],
             **reward_info
         }
 
@@ -100,13 +109,12 @@ class A1_Env(MujocoEnv):
         and (self.data.time - self._last_render_time) > (1.0/self.metadata['render_fps']):
             self.render()
             self._last_render_time = self.data.time
+        
+        self._last_action = action
 
         return obs, reward, terminated, truncated, info
     
     def reset_model(self):
-        if self.render_mode == "human":
-            self.mujoco_renderer.render("human")
-
         # no noise on floating base
         noise = np.concatenate(([0]*7, self._reset_rng.uniform(-0.05, 0.05, 12)))
         self.data.qpos[:] = A1_q0 + noise
@@ -116,20 +124,79 @@ class A1_Env(MujocoEnv):
         self._step = 0
         self._data_history.clear()
         self._last_render_time = -1.0
+        self._last_action = np.zeros(12)
 
         observation = self.observation_extractor.calc_obs(self.data, self._data_history)
         return observation
         
-    def _calc_reward(self, action):
-        # TODO calc reward
-        return 1, dict()
-    
-    def _calc_term_trunc(self, action):
-        # TODO do this
-        terminated = self._step >= (self._max_episode_time / self.dt)
-        truncated = False
-        return terminated, truncated
+    def _calc_reward(self, action) -> tuple[float, dict]:
+        # https://arxiv.org/abs/2203.05194 ignore the delta t
+        reward = 0
 
+        # Base velocity xy
+        v_xy = self.data.qvel[:2]
+        d_v_xy = self._v_xy_desired - v_xy
+        reward += weights['base_v_xy'] * np.exp(-np.square(d_v_xy).sum()/weights['sigma_v_xy'])
+
+        # Base velocity z
+        v_z = self.data.qvel[2]
+        reward += weights['base_v_z'] * v_z**2
+
+        # Base angular velocity xy
+        w_xy = self.data.qvel[3:5]
+        reward += weights['angular_xy'] * np.square(w_xy).sum()
+
+        # Base angular velocity z
+        w_z = self.data.qvel[5]
+        d_yaw = self._desired_yaw_rate - w_z
+        reward += weights['yaw_rate'] * np.exp(-np.square(d_yaw).sum()/weights['sigma_yaw'])
+
+        # Orientation
+        quat = self.data.qpos[3:7]
+        reward += weights['projected_gravity'] * np.square(projected_gravity(quat)[:2]).sum()
+
+        # Effort
+        reward += weights['effort'] * np.square(action).sum()
+
+        # Joint accel
+        qddot = self.data.qacc[-12:]
+        reward += weights['joint_accel'] * np.square(qddot).sum()
+
+        # Action rate
+        d_action = self._last_action - action
+        reward += weights['action_rate'] * np.square(d_action).sum()
+
+        # Heel Contact
+        is_contact = self.data.cfrc_ext[self._contact_indices] > 0.05
+        reward += weights['heel_contact'] * np.sum(is_contact)
+
+        # TODO add hip, thigh, air time rewards and fill out the dict probably lol
+
+        # Alive
+        reward += 1000
+
+        return reward, dict()
+    
+    def _calc_term_trunc(self) -> tuple[bool, bool]:
+        terminated = False
+        
+        body_quat = self.data.qpos[3:7]
+        body_z_axis = R_from_quat(body_quat)[:, 2]
+        cos_angle = np.dot(body_z_axis, self._upright)
+        if cos_angle < 0.25:
+            terminated = True # Bad orientation
+
+        body_z = self.data.qpos[2]
+        if body_z < 0.1:
+            terminated = True # Fallen
+
+        if not np.isfinite(self.state_vector()).all():
+            terminated = True # Something bad happened
+
+        truncated = self._step >= (self._max_episode_time / self.dt)
+
+        return terminated, truncated
+    
 
 if __name__ == '__main__':
     #=========INFO=========
@@ -142,7 +209,7 @@ if __name__ == '__main__':
     print("Number of bodies:", a1.nbody)
     print("Number of velocities:", a1.nv)
 
-    print("Positions (qpos):", data.qpos)        # joint positions
+    print("Positions (qpos):", data.qpos)       # joint positions
     print("Velocities (qvel):", data.qvel)      # joint velocities
     print("Accelerations (qacc):", data.qacc)   # joint accelerations
     print("Actuator forces (ctrl):", data.ctrl) # actuator commands
@@ -163,13 +230,13 @@ if __name__ == '__main__':
 
     print(joint_lower_limits, '\n', joint_upper_limits)
     print(a1.jnt_limited)
+    print(a1.opt.gravity)
 
 
     #=============MINIMAL RENDER===================
     env = A1_Env(BasicExtractor(), render_mode='human')
     obs, info = env.reset()
 
-    # Force render at start
     env.mujoco_renderer.render("human")
 
     for _ in range(2000):
