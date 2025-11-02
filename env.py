@@ -92,7 +92,7 @@ class A1_Env(MujocoEnv):
         self._data_history = deque(maxlen=self._history_len) # oldest to youngest
         self._last_action = np.zeros(12) # NOTE this is seperate from _data_history because it's used only for reward calculation
         
-    def step(self, action):
+    def step(self, action: np.ndarray):
         self._step += 1 # update for keeping time
         self._data_history.append(deepcopy(self.data)) # update history
         self.do_simulation(action*self._torque_scale, self.frame_skip)
@@ -110,7 +110,7 @@ class A1_Env(MujocoEnv):
             self.render()
             self._last_render_time = self.data.time
         
-        self._last_action = action
+        self._last_action = action.copy()
 
         return obs, reward, terminated, truncated, info
     
@@ -129,7 +129,7 @@ class A1_Env(MujocoEnv):
         observation = self.observation_extractor.calc_obs(self.data, self._data_history)
         return observation
         
-    def _calc_reward(self, action) -> tuple[float, dict]:
+    def _calc_reward(self, action: np.ndarray) -> tuple[float, dict]:
         # https://arxiv.org/abs/2203.05194 ignore the delta t
         reward = 0
 
