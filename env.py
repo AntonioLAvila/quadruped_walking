@@ -12,7 +12,8 @@ from util import (
     dt_control,
     dt_sim, A1_q0,
     default_cam_config,
-    control_freq
+    control_freq,
+    euler_from_quaternion
 )
 
 
@@ -103,6 +104,9 @@ class A1_Env(MujocoEnv):
         return obs, reward, terminated, truncated, info
     
     def reset_model(self):
+        if self.render_mode == "human":
+            self.mujoco_renderer.render("human")
+
         # no noise on floating base
         noise = np.concatenate(([0]*7, self._reset_rng.uniform(-0.05, 0.05, 12)))
         self.data.qpos[:] = A1_q0 + noise
@@ -115,7 +119,7 @@ class A1_Env(MujocoEnv):
 
         observation = self.observation_extractor.calc_obs(self.data, self._data_history)
         return observation
-    
+        
     def _calc_reward(self, action):
         # TODO calc reward
         return 1, dict()
@@ -125,31 +129,10 @@ class A1_Env(MujocoEnv):
         terminated = self._step >= (self._max_episode_time / self.dt)
         truncated = False
         return terminated, truncated
-    
-    @staticmethod
-    def euler_from_quaternion(quat):
-        """
-        Convert a quaternion into euler angles
-        RPY, (x,y,z), CCW
-        """
-        w, x, y, z = quat
-        t0 = +2.0 * (w * x + y * z)
-        t1 = +1.0 - 2.0 * (x * x + y * y)
-        roll_x = np.arctan2(t0, t1)
-
-        t2 = +2.0 * (w * y - z * x)
-        t2 = +1.0 if t2 > +1.0 else t2
-        t2 = -1.0 if t2 < -1.0 else t2
-        pitch_y = np.arcsin(t2)
-
-        t3 = +2.0 * (w * z + x * y)
-        t4 = +1.0 - 2.0 * (y * y + z * z)
-        yaw_z = np.arctan2(t3, t4)
-
-        return roll_x, pitch_y, yaw_z
 
 
 if __name__ == '__main__':
+    #=========INFO=========
     a1 = mujoco.MjModel.from_xml_path(a1_mj_description.MJCF_PATH)
     print(a1_mj_description.MJCF_PATH)
     data = mujoco.MjData(a1)
@@ -179,3 +162,20 @@ if __name__ == '__main__':
         print(f"Joint {i}: {name}, type={joint_type}, range={range_}, damping={damping}")
 
     print(joint_lower_limits, '\n', joint_upper_limits)
+    print(a1.jnt_limited)
+
+
+    #=============MINIMAL RENDER===================
+    env = A1_Env(BasicExtractor(), render_mode='human')
+    obs, info = env.reset()
+
+    # Force render at start
+    env.mujoco_renderer.render("human")
+
+    for _ in range(2000):
+        obs, reward, terminated, truncated, info = env.step(np.random.default_rng().uniform(-33.5, 33.5, 12))
+        if terminated or truncated:
+            obs, info = env.reset()
+
+    env.close()
+
