@@ -4,9 +4,17 @@ from robot_descriptions import a1_mj_description
 from gymnasium.envs.mujoco.mujoco_env import MujocoEnv
 from gymnasium.spaces import Box
 from typing import Optional
-from util import A1_joint_lb, A1_joint_ub, dt_control, dt_sim, A1_q0, default_cam_config, control_freq
 from copy import deepcopy
 from collections import deque
+from util import (
+    A1_joint_lb,
+    A1_joint_ub,
+    dt_control,
+    dt_sim, A1_q0,
+    default_cam_config,
+    control_freq
+)
+
 
 
 class ObservationExtractor():
