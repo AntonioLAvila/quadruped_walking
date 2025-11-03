@@ -30,11 +30,11 @@ def R_from_quat(quat) -> np.ndarray:
 
 def projected_gravity(quat) -> np.ndarray:
     '''Return the normalized gravity vector projected into the body frame using quaternion.'''
-    w, x, y, z = quat
+    w, x, y, z = quat[0], quat[1], quat[2], quat[3]
 
-    gx = (w*w + x*x - y*y - z*z) * gravity[0] + 2*(x*y - w*z) * gravity[1] + 2*(x*z + w*y) * gravity[2]
-    gy = 2*(x*y + w*z) * gravity[0] + (w*w - x*x + y*y - z*z) * gravity[1] + 2*(y*z - w*x) * gravity[2]
-    gz = 2*(x*z - w*y) * gravity[0] + 2*(y*z + w*x) * gravity[1] + (w*w - x*x - y*y + z*z) * gravity[2]
+    gx = 2*(x*z - w*y) * gravity[2]
+    gy = 2*(y*z + w*x) * gravity[2]
+    gz = (w*w - x*x - y*y + z*z) * gravity[2]
 
     vec = np.array([gx, gy, gz])
     norm = np.linalg.norm(vec)
@@ -76,7 +76,7 @@ weights = {
 
 #     return np.array([roll_x, pitch_y, yaw_z])
 
-# def projected_gravity(quat) -> np.ndarray:
+# def projected_gravity_2(quat) -> np.ndarray:
 #     euler_orientation = euler_from_quat(quat)
 #     projected_gravity_not_normalized = (np.dot(gravity, euler_orientation) * euler_orientation)
 #     if np.linalg.norm(projected_gravity_not_normalized) == 0:

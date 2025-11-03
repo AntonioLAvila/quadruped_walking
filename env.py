@@ -65,6 +65,7 @@ class A1_Env(MujocoEnv):
     def __init__(
         self,
         observation_extractor: ObservationExtractor,
+        torque_scale=10,
         **kwargs
     ):
         super().__init__(
@@ -77,7 +78,7 @@ class A1_Env(MujocoEnv):
         self.observation_extractor = observation_extractor
         self._reset_rng = np.random.default_rng()
         self._max_episode_time = 30.0 # seconds
-        self._torque_scale = 10
+        self._torque_scale = torque_scale
         self._q0 = np.array([0, 0, 0.3] + [1, 0, 0, 0] + [0, np.pi/4, -np.pi/2]*4)
 
         # Used in reward
@@ -110,6 +111,8 @@ class A1_Env(MujocoEnv):
         terminated, truncated = self.is_term_trunc
         info = {
             'p_WBody': self.data.qpos[:3],
+            'R_WBody': self.data.qpos[3:7],
+            'g_proj': projected_gravity(self.data.qpos[3:7]),
             **reward_info
         }
 
@@ -177,10 +180,10 @@ class A1_Env(MujocoEnv):
         reward_info['action_rate'] = weights['action_rate'] * np.square(d_action).sum()
 
         # Heel Contact
-        is_contact = self.data.cfrc_ext[self._contact_indices] > 0.1
+        is_contact = np.linalg.norm(self.data.cfrc_ext[self._contact_indices]) > 0.1
         reward_info['heel_contact'] = weights['heel_contact'] * np.sum(is_contact)
 
-        # Feet air time
+        # Feet air time TODO check this
         reward_info['feet_air_time'] = weights['feet_air_time'] * self.feet_air_time_reward
 
         #=======OPTIONAL==========

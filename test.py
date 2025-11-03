@@ -3,15 +3,11 @@ from env import A1_Env, BasicExtractor
 from argparse import ArgumentParser
 from stable_baselines3 import PPO
 from tqdm import tqdm
-import time
-import numpy as np
-import cv2
 
 
 def test(args):
     if not args.record:
         env = A1_Env(BasicExtractor(), render_mode='human')
-        sleep_time = 0.015
         env.mujoco_renderer.render('human')
         print('buh')
     else:
@@ -23,26 +19,27 @@ def test(args):
             height=1080
         )
         env = RecordVideo(env, video_folder=args.output)
-        sleep_time = 0.0
     
     model = PPO.load(path=args.model_path, env=env, verbose=1)
     
     total_reward = 0
     total_length = 0
-    for _ in tqdm(range(args.num_episodes)):
+    for _ in tqdm(range(int(args.num_episodes))):
         obs, _ = env.reset()
-        env.render()
 
         ep_len = 0
         ep_reward = 0
         while True:
             action, _ = model.predict(obs, deterministic=True)
+            action = action*env._torque_scale
             obs, reward, terminated, truncated, info = env.step(action)
             ep_reward += reward
             ep_len += 1
+            print('----------Info--------')
+            for k,v in info.items():
+                print(k, ' : ', v)
+            print('\n')
 
-            # Slow down the rendering
-            time.sleep(sleep_time)
 
             if terminated or truncated:
                 print(f"{ep_len=}  {ep_reward=}")
@@ -54,6 +51,7 @@ def test(args):
     print(
         f"Avg episode reward: {total_reward / args.num_episodes}\nAvg episode length: {total_length / args.num_episodes}"
     )
+    env.close()
 
 
 if __name__ == '__main__':
