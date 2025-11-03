@@ -1,21 +1,14 @@
 import numpy as np
 
-### A1 state
-# position: [quat, translation, joints]
-# velovity: [rotational, translational, joints]
 A1_q0 = np.array([0, 0, 0.3] + [1, 0, 0, 0] + [0, np.pi/4, -np.pi/2]*4)
-
-A1_torque_limit = 33.5
-
 A1_joint_lb = np.array([-0.802851, -1.0472, -2.69653, -0.802851, -1.0472, -2.69653, -0.802851, -1.0472, -2.69653, -0.802851, -1.0472, -2.69653])
 A1_joint_ub = np.array([0.802851, 4.18879, -0.916298, 0.802851, 4.18879, -0.916298, 0.802851, 4.18879, -0.916298, 0.802851, 4.18879, -0.916298])
 
 control_freq = 200 # Hz
-dt_control = 0.005
+dt_control = 0.005 # s
 dt_sim = 0.001
 
 gravity = np.array([0, 0, -9.806])
-
 
 default_cam_config = {
     "azimuth": 90.0,
@@ -36,8 +29,7 @@ def R_from_quat(quat) -> np.ndarray:
     ])
 
 def projected_gravity(quat) -> np.ndarray:
-    """Return the normalized gravity vector projected into the body frame using quaternion."""
-    global gravity
+    '''Return the normalized gravity vector projected into the body frame using quaternion.'''
     w, x, y, z = quat
 
     gx = (w*w + x*x - y*y - z*z) * gravity[0] + 2*(x*y - w*z) * gravity[1] + 2*(x*z + w*y) * gravity[2]
@@ -49,6 +41,23 @@ def projected_gravity(quat) -> np.ndarray:
     if norm == 0:
         return vec
     return vec / norm
+
+weights = {
+    'base_v_xy': 1.0,
+    'sigma_v_xy': 0.25,
+    'base_v_z': -2.0,
+    'angular_xy': -0.05,
+    'yaw_rate': 0.5,
+    'sigma_yaw': 0.25,
+    'projected_gravity': -1.0,
+    'effort': -2e-4,
+    'joint_accel': -2.5e-7,
+    'action_rate': -0.01,
+    'heel_contact': -1.0,
+    'feet_air_time': 2.0,
+    'hip_q': -1.0,
+    'thigh_q': -1.0
+}
 
 # def euler_from_quat(quat) -> np.ndarray:
 #     w, x, y, z = quat[0], quat[1], quat[2], quat[3]
@@ -76,16 +85,3 @@ def projected_gravity(quat) -> np.ndarray:
 
 
 
-weights = {
-    'base_v_xy': 1.0,
-    'sigma_v_xy': 0.25,
-    'base_v_z': -2.0,
-    'angular_xy': -0.05,
-    'yaw_rate': 0.5,
-    'sigma_yaw': 0.25,
-    'projected_gravity': -1.0,
-    'effort': -2e-4,
-    'joint_accel': -2.5e-7,
-    'action_rate': -0.01,
-    'heel_contact': -1.0
-}

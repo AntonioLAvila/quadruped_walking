@@ -43,18 +43,13 @@ def train(args):
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    # parser.add_argument('--num_envs', type=int, required=True)
-    # parser.add_argument('--num_steps', type=int, required=True)
-    # parser.add_argument('--model_dir', type=str, required=True)
-    # parser.add_argument('--log_dir', type=str, required=True)
-
-    parser.add_argument('--num_envs', type=int, required=False, default=4)
-    parser.add_argument('--num_steps', type=int, required=False, default=10_000_000)
-    parser.add_argument('--model_dir', type=str, required=False, default='buh')
-    parser.add_argument('--log_dir', type=str, required=False, default='buh')
+    parser.add_argument('--num_envs', type=int, required=True)
+    parser.add_argument('--num_steps', type=int, required=True)
+    parser.add_argument('--model_dir', type=str, required=True)
+    parser.add_argument('--log_dir', type=str, required=True)
+    parser.add_argument('--eval_freq', type=int, required=True)
 
     parser.add_argument('--seed', type=int, required=False, default=0)
-    parser.add_argument('--eval_freq', type=int, required=False, default=100000000000) # TODO fix this
     args = parser.parse_args()
 
     train(args)

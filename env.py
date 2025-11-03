@@ -10,15 +10,13 @@ from util import (
     A1_joint_lb,
     A1_joint_ub,
     dt_control,
-    dt_sim, A1_q0,
+    dt_sim,
     default_cam_config,
     control_freq,
     R_from_quat,
     projected_gravity,
-    weights
+    weights,
 )
-
-
 
 class ObservationExtractor():
     '''Base observation extractor class'''
@@ -77,20 +75,30 @@ class A1_Env(MujocoEnv):
             **kwargs
         )
         self.observation_extractor = observation_extractor
+        self._reset_rng = np.random.default_rng()
         self._max_episode_time = 30.0 # seconds
+        self._torque_scale = 10
+        self._q0 = np.array([0, 0, 0.3] + [1, 0, 0, 0] + [0, np.pi/4, -np.pi/2]*4)
+
+        # Used in reward
         self._upright = np.array([0,0,1])
-        self._torque_scale = 1 # NOTE should maybe set to 10 idk we'll see
         self._v_xy_desired = np.array([1,0])
         self._desired_yaw_rate = 0.0
         self._contact_indices = [2, 3, 5, 6, 8, 9, 11, 12]
-        self._reset_rng = np.random.default_rng()
+        self._hip_indices = [7, 10, 13, 16]
+        self._thigh_indices = [8, 11, 14, 17]
+        self._hip_q0 = np.zeros(4)
+        self._thigh_q0 = np.ones(4) * (np.pi/4)
+        self._feet_indices = [4, 7, 10, 13]
 
-        # stateful things
+        # Stateful things
         self._step = 0
         self._last_render_time = -1.0
         self._history_len = self.observation_extractor.history_len
         self._data_history = deque(maxlen=self._history_len) # oldest to youngest
         self._last_action = np.zeros(12) # NOTE this is seperate from _data_history because it's used only for reward calculation
+        self._last_contacts = np.zeros(4)
+        self._feet_air_time = np.zeros(4)
         
     def step(self, action: np.ndarray):
         self._step += 1 # update for keeping time
@@ -99,7 +107,7 @@ class A1_Env(MujocoEnv):
 
         obs = self.observation_extractor.calc_obs(self.data, self._data_history)
         reward, reward_info = self._calc_reward(action)
-        terminated, truncated = self._calc_term_trunc()
+        terminated, truncated = self.is_term_trunc
         info = {
             'p_WBody': self.data.qpos[:3],
             **reward_info
@@ -115,9 +123,9 @@ class A1_Env(MujocoEnv):
         return obs, reward, terminated, truncated, info
     
     def reset_model(self):
-        # no noise on floating base
+        # No noise on floating base
         noise = np.concatenate(([0]*7, self._reset_rng.uniform(-0.05, 0.05, 12)))
-        self.data.qpos[:] = A1_q0 + noise
+        self.data.qpos[:] = self._q0 + noise
 
         self.data.ctrl[:] = self._reset_rng.normal(0, 0.1, 12)
 
@@ -125,59 +133,74 @@ class A1_Env(MujocoEnv):
         self._data_history.clear()
         self._last_render_time = -1.0
         self._last_action = np.zeros(12)
+        self._last_contacts = np.zeros(4)
+        self._feet_air_time = np.zeros(4)
 
         observation = self.observation_extractor.calc_obs(self.data, self._data_history)
         return observation
         
     def _calc_reward(self, action: np.ndarray) -> tuple[float, dict]:
         # https://arxiv.org/abs/2203.05194 ignore the delta t
-        reward = 0
+        reward_info = {}
 
         # Base velocity xy
         v_xy = self.data.qvel[:2]
         d_v_xy = self._v_xy_desired - v_xy
-        reward += weights['base_v_xy'] * np.exp(-np.square(d_v_xy).sum()/weights['sigma_v_xy'])
+        reward_info['base_v_xy'] = weights['base_v_xy'] * np.exp(-np.square(d_v_xy).sum()/weights['sigma_v_xy'])
 
         # Base velocity z
         v_z = self.data.qvel[2]
-        reward += weights['base_v_z'] * v_z**2
+        reward_info['base_v_z'] = weights['base_v_z'] * v_z**2
 
         # Base angular velocity xy
         w_xy = self.data.qvel[3:5]
-        reward += weights['angular_xy'] * np.square(w_xy).sum()
+        reward_info['angular_xy'] = weights['angular_xy'] * np.square(w_xy).sum()
 
         # Base angular velocity z
         w_z = self.data.qvel[5]
         d_yaw = self._desired_yaw_rate - w_z
-        reward += weights['yaw_rate'] * np.exp(-np.square(d_yaw).sum()/weights['sigma_yaw'])
+        reward_info['yaw_rate'] = weights['yaw_rate'] * np.exp(-np.square(d_yaw).sum()/weights['sigma_yaw'])
 
         # Orientation
         quat = self.data.qpos[3:7]
-        reward += weights['projected_gravity'] * np.square(projected_gravity(quat)[:2]).sum()
+        reward_info['projected_gravity'] = weights['projected_gravity'] * np.square(projected_gravity(quat)[:2]).sum()
 
         # Effort
-        reward += weights['effort'] * np.square(action).sum()
+        reward_info['effort'] = weights['effort'] * np.square(action).sum()
 
         # Joint accel
         qddot = self.data.qacc[-12:]
-        reward += weights['joint_accel'] * np.square(qddot).sum()
+        reward_info['joint_accel'] = weights['joint_accel'] * np.square(qddot).sum()
 
         # Action rate
         d_action = self._last_action - action
-        reward += weights['action_rate'] * np.square(d_action).sum()
+        reward_info['action_rate'] = weights['action_rate'] * np.square(d_action).sum()
 
         # Heel Contact
-        is_contact = self.data.cfrc_ext[self._contact_indices] > 0.05
-        reward += weights['heel_contact'] * np.sum(is_contact)
+        is_contact = self.data.cfrc_ext[self._contact_indices] > 0.1
+        reward_info['heel_contact'] = weights['heel_contact'] * np.sum(is_contact)
 
-        # TODO add hip, thigh, air time rewards and fill out the dict probably lol
+        # Feet air time
+        reward_info['feet_air_time'] = weights['feet_air_time'] * self.feet_air_time_reward
+
+        #=======OPTIONAL==========
+        # Hip position
+        hip_q = self.data.qpos[self._hip_indices]
+        d_hip_q = self._hip_q0 - hip_q
+        reward_info['hip_q'] = weights['hip_q'] * np.abs(d_hip_q).sum()
+
+        # Thigh position
+        thigh_q = self.data.qpos[self._thigh_indices]
+        d_thigh_q = self._thigh_q0 - thigh_q
+        reward_info['thigh_q'] = weights['thigh_q'] * np.abs(d_thigh_q).sum()
 
         # Alive
-        reward += 1000
+        # reward_info['alive'] = 1000
 
-        return reward, dict()
+        return np.sum(reward_info.values()), reward_info
     
-    def _calc_term_trunc(self) -> tuple[bool, bool]:
+    @property
+    def is_term_trunc(self) -> tuple[bool, bool]:
         terminated = False
         
         body_quat = self.data.qpos[3:7]
@@ -196,6 +219,33 @@ class A1_Env(MujocoEnv):
         truncated = self._step >= (self._max_episode_time / self.dt)
 
         return terminated, truncated
+    
+    @property
+    def feet_contact_forces(self) -> np.ndarray:
+        feet_contact_forces = self.data.cfrc_ext[self._feet_indices]
+        return np.linalg.norm(feet_contact_forces, axis=1)
+
+    @property
+    def feet_air_time_reward(self) -> float:
+        feet_contact_force_mag = self.feet_contact_forces
+        curr_contact = feet_contact_force_mag > 1.0
+        contact_filter = np.logical_or(curr_contact, self._last_contacts)
+        self._last_contacts = curr_contact
+
+        # if feet_air_time is > 0 (feet was in the air) and contact_filter detects a contact with the ground
+        # then it is the first contact of this stride
+        first_contact = (self._feet_air_time > 0.0) * contact_filter
+        self._feet_air_time += self.dt
+
+        # Award the feets that have just finished their stride (first step with contact)
+        air_time_reward = np.sum((self._feet_air_time - 1.0) * first_contact)
+        # No award if the desired velocity is very low (i.e. robot should remain stationary and feet shouldn't move)
+        air_time_reward *= np.linalg.norm(self._v_xy_desired) > 0.1
+
+        # zero-out the air time for the feet that have just made contact (i.e. contact_filter==1)
+        self._feet_air_time *= ~contact_filter
+
+        return air_time_reward
     
 
 if __name__ == '__main__':
@@ -231,7 +281,7 @@ if __name__ == '__main__':
     print(joint_lower_limits, '\n', joint_upper_limits)
     print(a1.jnt_limited)
     print(a1.opt.gravity)
-
+    print(a1.actuator_ctrlrange)
 
     #=============MINIMAL RENDER===================
     env = A1_Env(BasicExtractor(), render_mode='human')
