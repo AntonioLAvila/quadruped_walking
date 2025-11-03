@@ -183,7 +183,7 @@ class A1_Env(MujocoEnv):
         is_contact = (np.linalg.norm(self.data.cfrc_ext[self._contact_indices], axis=1) > 1e-3).astype(int)
         reward_info['contact'] = weights['contact'] * np.sum(is_contact)
 
-        # Feet air time TODO check this
+        # Feet air time TODO check this again
         reward_info['feet_air_time'] = weights['feet_air_time'] * self.feet_air_time_reward
 
         #=======OPTIONAL==========
@@ -226,15 +226,13 @@ class A1_Env(MujocoEnv):
         truncated = self._step >= (self._max_episode_time / self.dt)
 
         return terminated, truncated
-    
-    @property
-    def feet_contact_forces(self) -> np.ndarray:
-        feet_contact_forces = self.data.cfrc_ext[self._feet_indices]
-        return np.linalg.norm(feet_contact_forces, axis=1)
 
     @property
     def feet_air_time_reward(self) -> float:
-        feet_contact_force_mag = self.feet_contact_forces
+        feet_contact_forces = self.data.cfrc_ext[self._feet_indices]
+        feet_contact_forces = np.linalg.norm(feet_contact_forces, axis=1)
+
+        feet_contact_force_mag = feet_contact_forces
         curr_contact = feet_contact_force_mag > 1.0
         contact_filter = np.logical_or(curr_contact, self._last_contacts)
         self._last_contacts = curr_contact
@@ -245,7 +243,7 @@ class A1_Env(MujocoEnv):
         self._feet_air_time += self.dt
 
         # Award the feets that have just finished their stride (first step with contact)
-        air_time_reward = np.sum((self._feet_air_time - 1.0) * first_contact)
+        air_time_reward = np.sum((self._feet_air_time - 0.5) * first_contact)
         # No award if the desired velocity is very low (i.e. robot should remain stationary and feet shouldn't move)
         air_time_reward *= np.linalg.norm(self._v_xy_desired) > 0.1
 
