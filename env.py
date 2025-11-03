@@ -196,8 +196,8 @@ class A1_Env(MujocoEnv):
 
         # Alive
         # reward_info['alive'] = 1000
-
-        return np.sum(reward_info.values()), reward_info
+ 
+        return np.sum(list(reward_info.values())), reward_info
     
     @property
     def is_term_trunc(self) -> tuple[bool, bool]:
