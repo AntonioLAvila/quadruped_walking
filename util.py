@@ -53,7 +53,7 @@ weights = {
     'effort': -2e-4,
     'joint_accel': -2.5e-7,
     'action_rate': -0.01,
-    'heel_contact': -1.0,
+    'contact': -1.0,
     'feet_air_time': 2.0,
     'hip_q': -1.0,
     'thigh_q': -1.0

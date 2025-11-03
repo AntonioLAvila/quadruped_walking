@@ -85,7 +85,7 @@ class A1_Env(MujocoEnv):
         self._upright = np.array([0,0,1])
         self._v_xy_desired = np.array([1,0])
         self._desired_yaw_rate = 0.0
-        self._contact_indices = [2, 3, 5, 6, 8, 9, 11, 12]
+        self._contact_indices = [2, 3, 5, 6, 8, 9, 11, 12] # hip and thigh
         self._hip_indices = [7, 10, 13, 16]
         self._thigh_indices = [8, 11, 14, 17]
         self._hip_q0 = np.zeros(4)
@@ -179,9 +179,9 @@ class A1_Env(MujocoEnv):
         d_action = self._last_action - action
         reward_info['action_rate'] = weights['action_rate'] * np.square(d_action).sum()
 
-        # Heel Contact
-        is_contact = np.linalg.norm(self.data.cfrc_ext[self._contact_indices]) > 0.1
-        reward_info['heel_contact'] = weights['heel_contact'] * np.sum(is_contact)
+        # Hip Thigh Contact
+        is_contact = (np.linalg.norm(self.data.cfrc_ext[self._contact_indices], axis=1) > 1e-3).astype(int)
+        reward_info['contact'] = weights['contact'] * np.sum(is_contact)
 
         # Feet air time TODO check this
         reward_info['feet_air_time'] = weights['feet_air_time'] * self.feet_air_time_reward
@@ -303,3 +303,14 @@ if __name__ == '__main__':
 
     env.close()
 
+    #=============BODY NAMES=======================
+    # data = mujoco.MjData(a1)
+
+    # mujoco.mj_step(a1, data)
+
+    # body_names = [mujoco.mj_id2name(a1, mujoco.mjtObj.mjOBJ_BODY, i)
+    #             for i in range(a1.nbody)]
+
+    # for i, name in enumerate(body_names):
+    #     cfrc = data.cfrc_ext[i]
+    #     print(f"Body: {name}, CFRC: {cfrc}")
