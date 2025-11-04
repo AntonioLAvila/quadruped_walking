@@ -32,7 +32,7 @@ def train(args):
     )
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=args.eval_freq,
+        save_freq=args.eval_freq//args.num_envs,
         save_path=args.model_dir,
         name_prefix="ppo_checkpoint",
         save_replay_buffer=False,
