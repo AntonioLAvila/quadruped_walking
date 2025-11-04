@@ -56,6 +56,7 @@ def train(args):
         max_grad_norm=0.5,
         target_kl=0.03,
         tensorboard_log=args.log_dir,
+        device='cpu'
     )
 
     model.learn(
