@@ -250,7 +250,7 @@ class A1_Env(MujocoEnv):
         self._feet_air_time += self.dt
 
         # Award the feets that have just finished their stride (first step with contact)
-        air_time_reward = np.sum((self._feet_air_time - 0.5) * first_contact)
+        air_time_reward = np.sum((self._feet_air_time - 0.1) * first_contact)
         # No award if the desired velocity is very low (i.e. robot should remain stationary and feet shouldn't move)
         air_time_reward *= np.linalg.norm(self._v_xy_desired) > 0.1
 
