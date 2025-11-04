@@ -79,7 +79,7 @@ class A1_Env(MujocoEnv):
         )
         self.observation_extractor = observation_extractor
         self._reset_rng = np.random.default_rng()
-        self._max_episode_time = 30.0 # seconds
+        self._max_episode_time = 15.0 # seconds
         self._torque_scale = torque_scale
         self._q0 = np.array([0, 0, 0.3] + [1, 0, 0, 0] + [0, np.pi/4, -np.pi/2]*4)
 
