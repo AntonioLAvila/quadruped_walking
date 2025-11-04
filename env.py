@@ -82,6 +82,7 @@ class A1_Env(MujocoEnv):
         self._max_episode_time = 15.0 # seconds
         self._torque_scale = torque_scale
         self._q0 = np.array([0, 0, 0.3] + [1, 0, 0, 0] + [0, np.pi/4, -np.pi/2]*4)
+        self._torque_limit = 33.5
 
         # Used in reward
         self._upright = np.array([0,0,1])
@@ -106,7 +107,11 @@ class A1_Env(MujocoEnv):
     def step(self, action: np.ndarray):
         self._step += 1 # update for keeping time
         self._data_history.append(deepcopy(self.data)) # update history
-        self.do_simulation(action*self._torque_scale, self.frame_skip)
+
+        action = action*self._torque_scale
+        action = np.clip(action, -self._torque_limit, self._torque_limit)
+
+        self.do_simulation(action, self.frame_skip)
 
         obs = self.observation_extractor.calc_obs(self.data, self._data_history)
         reward, reward_info = self._calc_reward(action)

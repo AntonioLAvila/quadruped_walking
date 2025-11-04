@@ -1,7 +1,7 @@
 from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, CallbackList
-from stable_baselines3.common.vec_env import SubprocVecEnv
+from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
 from env import A1_Env, BasicExtractor
 from argparse import ArgumentParser
 
@@ -16,6 +16,8 @@ def train(args):
         seed=args.seed,
         vec_env_cls=SubprocVecEnv
     )
+
+    vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
     print(f"Training on {args.num_envs} envs\nSaving models to '{args.model_dir}'")
 
@@ -40,7 +42,21 @@ def train(args):
     callback = CallbackList([eval_callback, checkpoint_callback])
 
 
-    model = PPO('MlpPolicy', vec_env, verbose=1, tensorboard_log=args.log_dir)
+    # model = PPO('MlpPolicy', vec_env, verbose=1, tensorboard_log=args.log_dir)
+    model = PPO(
+        "MlpPolicy",
+        vec_env,
+        verbose=1,
+        learning_rate=1e-4,
+        n_steps=4096,
+        batch_size=256,
+        ent_coef=0.01,
+        clip_range=0.1,
+        vf_coef=0.5,
+        max_grad_norm=0.5,
+        target_kl=0.03,
+        tensorboard_log=args.log_dir,
+    )
 
     model.learn(
         total_timesteps=args.num_steps,

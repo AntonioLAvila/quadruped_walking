@@ -59,6 +59,7 @@ weights = {
     'thigh_q': -1.0
 }
 
+
 # def euler_from_quat(quat) -> np.ndarray:
 #     w, x, y, z = quat[0], quat[1], quat[2], quat[3]
 #     t0 = +2.0 * (w * x + y * z)

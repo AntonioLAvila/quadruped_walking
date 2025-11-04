@@ -14,7 +14,7 @@ def test(args):
         env = A1_Env(
             BasicExtractor(),
             render_mode='rgb_array',
-            camera_name='tracking', # TODO make this
+            camera_name='tracking',
             width=1920,
             height=1080
         )
