@@ -18,6 +18,8 @@ from util import (
     weights,
 )
 
+# NOTE error about render_fps -> change the time step of the mjcf to 0.001
+
 class ObservationExtractor():
     '''Base observation extractor class'''
     obs_space: Optional[Box] = None
