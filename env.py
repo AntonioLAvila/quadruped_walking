@@ -61,13 +61,13 @@ class A1_Env(MujocoEnv):
             'rgb_array',
             'depth_array'
         ],
-        'render_fps': control_freq
+        'render_fps': 200
     }
 
     def __init__(
         self,
         observation_extractor: ObservationExtractor,
-        torque_scale=10,
+        torque_scale=1,
         **kwargs
     ):
         super().__init__(
