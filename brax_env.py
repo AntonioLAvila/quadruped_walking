@@ -19,6 +19,8 @@ from util import (
 )
 from robot_descriptions import a1_mj_description
 
+print(a1_mj_description.MJCF_PATH)
+
 # --- Custom JAX-compatible State definition (Same as before) ---
 
 @flax.struct.dataclass
@@ -103,7 +105,7 @@ class A1_Env(PipelineEnv):
         rng_seed=0,
         **kwargs
     ):
-        sys = mjcf.load(a1_mj_description.MJCF_PATH)
+        sys = mjcf.load('a1/xml/a1.xml')
         
         super().__init__(
             sys=sys,
