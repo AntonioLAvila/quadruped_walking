@@ -2,12 +2,12 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.callbacks import EvalCallback, CheckpointCallback, CallbackList
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecNormalize
-from env import A1_Env, BasicExtractor
+from env import Go1_Env
 from argparse import ArgumentParser
 
 
 def make_env(**kwargs):
-    env =  A1_Env(observation_extractor=BasicExtractor(), render_mode='human', **kwargs)
+    env =  Go1_Env(history_length=1, render_mode='human', **kwargs)
     env.mujoco_renderer.render('human')
     return env
 
@@ -19,7 +19,7 @@ def train(args):
         vec_env_cls=SubprocVecEnv
     )
 
-    vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
+    # vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
 
     print(f"Training on {args.num_envs} envs\nSaving models to '{args.model_dir}'")
 

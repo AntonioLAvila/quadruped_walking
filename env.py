@@ -1,88 +1,67 @@
 import mujoco
 import numpy as np
-from robot_descriptions import a1_mj_description
 from gymnasium.envs.mujoco.mujoco_env import MujocoEnv
 from gymnasium.spaces import Box
-from typing import Optional
-from copy import deepcopy
 from collections import deque
 from util import (
-    A1_joint_lb,
-    A1_joint_ub,
     dt_control,
     dt_sim,
     default_cam_config,
-    control_freq,
-    R_from_quat,
-    projected_gravity,
-    weights,
 )
 
-# NOTE error about render_fps -> change the time step of the mjcf to 0.001
-
-class ObservationExtractor():
-    '''Base observation extractor class'''
-    obs_space: Optional[Box] = None
-    history_len: int = None
-
-    def __init__(self):
-        if self.obs_space is None:
-            raise ValueError(f'{self.__class__.__name__} must define self.obs_ub')
-        if self.history_len is None:
-            raise ValueError(f'{self.__class__.__name__} must define self.history_len')
-
-    def calc_obs(self, mjdata, data_history: deque):
-        # data_history is oldest to youngest
-        raise NotImplementedError('Subclasses must implement calc_obs()')
+'''
+Credit to nimazareian on github for adapting mujoco menagerie Go1
+for torque control.
+'''
 
 
-class BasicExtractor(ObservationExtractor):
-    def __init__(self):
-        # orientation, joint pos, body spatial vel, body rotational vel, joint vel, g_proj
-        self.obs_space = Box(
-            low=np.concatenate(([-1]*4, A1_joint_lb, [-np.inf]*18, [-1]*3)),
-            high=np.concatenate(([1]*4, A1_joint_ub, [np.inf]*18, [1]*3)),
-            dtype=np.float64
-        )
-        self.history_len = 0
-        super().__init__()
-
-    def calc_obs(self, mjdata, data_history: deque):
-        o_and_q = mjdata.qpos[3:]
-        g_proj = projected_gravity(mjdata.qpos[3:7])
-        return np.concatenate((o_and_q, mjdata.qvel, g_proj))
-
-
-class A1_Env(MujocoEnv):
+class Go1_Env(MujocoEnv):
 
     metadata = {
         'render_modes': [
             'human',
             'rgb_array',
             'depth_array'
-        ],
-        'render_fps': 200
+        ]
     }
 
-    def __init__(
-        self,
-        observation_extractor: ObservationExtractor,
-        torque_scale=1,
-        **kwargs
-    ):
+    def __init__(self, history_length, torque_scale=3, **kwargs):
+
         super().__init__(
-            model_path=a1_mj_description.MJCF_PATH,
+            model_path='/home/antonio/GitHub/quadruped_walking/unitree_go1/scene_torque.xml',
             frame_skip=int(dt_control/dt_sim),
-            observation_space=observation_extractor.obs_space,
+            observation_space=None,
             default_camera_config=default_cam_config,
             **kwargs
         )
-        self.observation_extractor = observation_extractor
+
+        self.metadata = {
+            'render_modes': [
+                'human',
+                'rgb_array',
+                'depth_array'
+            ],
+            'render_fps': 60
+        }
+
         self._reset_rng = np.random.default_rng()
         self._max_episode_time = 15.0 # seconds
+        self._gravity = np.array(self.model.opt.gravity)
         self._torque_scale = torque_scale
-        self._q0 = np.array([0, 0, 0.3] + [1, 0, 0, 0] + [0, np.pi/4, -np.pi/2]*4)
-        self._torque_limit = 33.5
+
+        # observation stuff
+        self._last_action = np.zeros(12) # must be defined before calling _calc_obs
+        self._obs_history = deque(maxlen=history_length)
+        self._history_len = history_length
+        self._obs_clip_thresh = 100.0
+        obs_shape = self._calc_obs().shape
+        obs_shape = (obs_shape[0]*history_length,)
+        self.observation_space = Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=self._calc_obs().shape,
+            dtype=np.float64
+        )
 
         # Used in reward
         self._upright = np.array([0,0,1])
@@ -91,35 +70,51 @@ class A1_Env(MujocoEnv):
         self._contact_indices = [2, 3, 5, 6, 8, 9, 11, 12] # hip and thigh
         self._hip_indices = [7, 10, 13, 16]
         self._thigh_indices = [8, 11, 14, 17]
-        self._hip_q0 = np.zeros(4)
-        self._thigh_q0 = np.ones(4) * (np.pi/4)
+        self._hip_q0 = self.model.key_qpos[0][self._hip_indices]
+        self._thigh_q0 = self.model.key_qpos[0][self._thigh_indices]
         self._feet_indices = [4, 7, 10, 13]
 
         # Stateful things
         self._step = 0
         self._last_render_time = -1.0
-        self._history_len = self.observation_extractor.history_len
-        self._data_history = deque(maxlen=self._history_len) # oldest to youngest
-        self._last_action = np.zeros(12) # NOTE this is seperate from _data_history because it's used only for reward calculation
         self._last_contacts = np.zeros(4)
         self._feet_air_time = np.zeros(4)
+
+        self._weights = {
+            'base_v_xy': 2.0,
+            'sigma_v_xy': 0.25,
+            'base_v_z': -1.0,
+            'angular_xy': -0.05,
+            'yaw_rate': 0.5,
+            'sigma_yaw': 0.25,
+            'projected_gravity': -1.0,
+            'effort': -2e-4,
+            'joint_accel': -2.5e-7,
+            'action_rate': -0.01,
+            'contact': -1.0,
+            'feet_air_time': 2.0,
+            'hip_q': -1.0,
+            'thigh_q': -1.0
+        }
         
     def step(self, action: np.ndarray):
         self._step += 1 # update for keeping time
-        self._data_history.append(deepcopy(self.data)) # update history
 
-        action = action*self._torque_scale
-        action = np.clip(action, -self._torque_limit, self._torque_limit)
+        send_action = np.clip(action*self._torque_scale, -1.0, 1.0)
 
-        self.do_simulation(action, self.frame_skip)
+        self.do_simulation(send_action, self.frame_skip) # step simulator
 
-        obs = self.observation_extractor.calc_obs(self.data, self._data_history)
+        # add observation to history
+        obs = self._calc_obs()
+        self._obs_history.append(obs)
+
         reward, reward_info = self._calc_reward(action)
-        terminated, truncated = self.is_term_trunc
+        terminated, truncated = self._calc_term_trunc()
         info = {
             'p_WBody': self.data.qpos[:3],
             'R_WBody': self.data.qpos[3:7],
-            'g_proj': projected_gravity(self.data.qpos[3:7]),
+            "distance_from_origin": np.linalg.norm(self.data.qpos[0:2], ord=2),
+            'g_proj': self.projected_gravity(self.data.qpos[3:7]),
             **reward_info
         }
 
@@ -128,97 +123,38 @@ class A1_Env(MujocoEnv):
             self.render()
             self._last_render_time = self.data.time
         
-        self._last_action = action.copy()
+        self._last_action = action
 
-        return obs, reward, terminated, truncated, info
+        final_obs = np.concatenate(self._obs_history)
+
+        print(final_obs)
+
+        return final_obs, reward, terminated, truncated, info
     
     def reset_model(self):
         # No noise on floating base
         noise = np.concatenate(([0]*7, self._reset_rng.uniform(-0.05, 0.05, 12)))
-        self.data.qpos[:] = self._q0 + noise
+        self.data.qpos[:] = self.model.key_qpos[0] + noise
 
-        self.data.ctrl[:] = self._reset_rng.normal(0, 0.1, 12)
+        self.data.ctrl[:] = self.model.key_ctrl[0] + 0.1*self.np_random.standard_normal(*self.data.ctrl.shape)
 
         self._step = 0
-        self._data_history.clear()
+        self._obs_history.clear()
         self._last_render_time = -1.0
         self._last_action = np.zeros(12)
         self._last_contacts = np.zeros(4)
         self._feet_air_time = np.zeros(4)
 
-        observation = self.observation_extractor.calc_obs(self.data, self._data_history)
-        return observation
-        
-    def _calc_reward(self, action: np.ndarray) -> tuple[float, dict]:
-        # https://arxiv.org/abs/2203.05194 ignore the delta t
-        reward_info = {}
+        obs = self._calc_obs()
+        self._obs_history.append(obs)
 
-        # Base velocity xy
-        v_xy = self.data.qvel[:2]
-        d_v_xy = self._v_xy_desired - v_xy
-        reward_info['base_v_xy'] = weights['base_v_xy'] * np.exp(-np.square(d_v_xy).sum()/weights['sigma_v_xy'])
-
-        # Base velocity z
-        v_z = self.data.qvel[2]
-        reward_info['base_v_z'] = weights['base_v_z'] * v_z**2
-
-        # Base angular velocity xy
-        w_xy = self.data.qvel[3:5]
-        reward_info['angular_xy'] = weights['angular_xy'] * np.square(w_xy).sum()
-
-        # Base angular velocity z
-        w_z = self.data.qvel[5]
-        d_yaw = self._desired_yaw_rate - w_z
-        reward_info['yaw_rate'] = weights['yaw_rate'] * np.exp(-np.square(d_yaw).sum()/weights['sigma_yaw'])
-
-        # Orientation
-        quat = self.data.qpos[3:7]
-        reward_info['projected_gravity'] = weights['projected_gravity'] * np.square(projected_gravity(quat)[:2]).sum()
-
-        # Effort
-        reward_info['effort'] = weights['effort'] * np.square(action).sum()
-
-        # Joint accel
-        qddot = self.data.qacc[-12:]
-        reward_info['joint_accel'] = weights['joint_accel'] * np.square(qddot).sum()
-
-        # Action rate
-        d_action = self._last_action - action
-        reward_info['action_rate'] = weights['action_rate'] * np.square(d_action).sum()
-
-        # Hip Thigh Contact
-        is_contact = (np.linalg.norm(self.data.cfrc_ext[self._contact_indices], axis=1) > 1e-3).astype(int)
-        reward_info['contact'] = weights['contact'] * np.sum(is_contact)
-
-        # Feet air time TODO check this again
-        reward_info['feet_air_time'] = weights['feet_air_time'] * self.feet_air_time_reward
-
-        #=======OPTIONAL==========
-        # Hip position
-        hip_q = self.data.qpos[self._hip_indices]
-        d_hip_q = self._hip_q0 - hip_q
-        reward_info['hip_q'] = weights['hip_q'] * np.abs(d_hip_q).sum()
-
-        # Thigh position
-        thigh_q = self.data.qpos[self._thigh_indices]
-        d_thigh_q = self._thigh_q0 - thigh_q
-        reward_info['thigh_q'] = weights['thigh_q'] * np.abs(d_thigh_q).sum()
-
-        # Alive
-        # reward_info['alive'] = 1000
-
-        reward = 0.0
-        for i in reward_info.values():
-            reward += i
- 
-        return reward, reward_info
+        return np.concatenate(self._obs_history)
     
-    @property
-    def is_term_trunc(self) -> tuple[bool, bool]:
+    def _calc_term_trunc(self) -> tuple[bool, bool]:
         terminated = False
         
         body_quat = self.data.qpos[3:7]
-        body_z_axis = R_from_quat(body_quat)[:, 2]
+        body_z_axis = self.R_from_quat(body_quat)[:, 2]
         cos_angle = np.dot(body_z_axis, self._upright)
         if cos_angle < 0.25:
             terminated = True # Bad orientation
@@ -233,6 +169,74 @@ class A1_Env(MujocoEnv):
         truncated = self._step >= (self._max_episode_time / self.dt)
 
         return terminated, truncated
+    
+    def _calc_obs(self):
+        o_and_q = self.data.qpos[3:]
+        g_proj = self.projected_gravity(self.data.qpos[3:7])
+        obs_unbounded = np.concatenate((o_and_q, self.data.qvel, g_proj, self._last_action))
+        obs_clipped = np.clip(obs_unbounded, -self._obs_clip_thresh, self._obs_clip_thresh)
+        return obs_clipped
+        
+    def _calc_reward(self, action: np.ndarray) -> tuple[float, dict]:
+        # https://arxiv.org/abs/2203.05194 ignore the delta t
+        reward_info = {}
+
+        # Base velocity xy
+        v_xy = self.data.qvel[:2]
+        d_v_xy = self._v_xy_desired - v_xy
+        reward_info['base_v_xy'] = self._weights['base_v_xy'] * np.exp(-np.square(d_v_xy).sum()/self._weights['sigma_v_xy'])
+
+        # Base velocity z
+        v_z = self.data.qvel[2]
+        reward_info['base_v_z'] = self._weights['base_v_z'] * v_z**2
+
+        # Base angular velocity xy
+        w_xy = self.data.qvel[3:5]
+        reward_info['angular_xy'] = self._weights['angular_xy'] * np.square(w_xy).sum()
+
+        # Base angular velocity z
+        w_z = self.data.qvel[5]
+        d_yaw = self._desired_yaw_rate - w_z
+        reward_info['yaw_rate'] = self._weights['yaw_rate'] * np.exp(-np.square(d_yaw).sum()/self._weights['sigma_yaw'])
+
+        # Orientation
+        quat = self.data.qpos[3:7]
+        reward_info['projected_gravity'] = self._weights['projected_gravity'] * np.square(self.projected_gravity(quat)[:2]).sum()
+
+        # Effort
+        reward_info['effort'] = self._weights['effort'] * np.square(action).sum()
+
+        # Joint accel
+        qddot = self.data.qacc[-12:]
+        reward_info['joint_accel'] = self._weights['joint_accel'] * np.square(qddot).sum()
+
+        # Action rate
+        d_action = self._last_action - action
+        reward_info['action_rate'] = self._weights['action_rate'] * np.square(d_action).sum()
+
+        # Hip Thigh Contact
+        is_contact = (np.linalg.norm(self.data.cfrc_ext[self._contact_indices], axis=1) > 1e-3).astype(int)
+        reward_info['contact'] = self._weights['contact'] * np.sum(is_contact)
+
+        # Feet air time TODO check this again
+        reward_info['feet_air_time'] = self._weights['feet_air_time'] * self.feet_air_time_reward
+
+        #=======OPTIONAL==========
+        # Hip position
+        hip_q = self.data.qpos[self._hip_indices]
+        d_hip_q = self._hip_q0 - hip_q
+        reward_info['hip_q'] = self._weights['hip_q'] * np.abs(d_hip_q).sum()
+
+        # Thigh position
+        thigh_q = self.data.qpos[self._thigh_indices]
+        d_thigh_q = self._thigh_q0 - thigh_q
+        reward_info['thigh_q'] = self._weights['thigh_q'] * np.abs(d_thigh_q).sum()
+
+        reward = 0.0
+        for i in reward_info.values():
+            reward += i
+ 
+        return reward, reward_info
 
     @property
     def feet_air_time_reward(self) -> float:
@@ -250,7 +254,7 @@ class A1_Env(MujocoEnv):
         self._feet_air_time += self.dt
 
         # Award the feets that have just finished their stride (first step with contact)
-        air_time_reward = np.sum((self._feet_air_time - 0.1) * first_contact)
+        air_time_reward = np.sum((self._feet_air_time - 0.25) * first_contact)
         # No award if the desired velocity is very low (i.e. robot should remain stationary and feet shouldn't move)
         air_time_reward *= np.linalg.norm(self._v_xy_desired) > 0.1
 
@@ -259,11 +263,36 @@ class A1_Env(MujocoEnv):
 
         return air_time_reward
     
+    @staticmethod
+    def R_from_quat(quat) -> np.ndarray:
+        w, x, y, z = quat[0], quat[1], quat[2], quat[3]
+        return np.array([
+            [1 - 2*(y*y + z*z), 2*(x*y - w*z), 2*(x*z + w*y)],
+            [2*(x*y + w*z), 1 - 2*(x*x + z*z), 2*(y*z - w*x)],
+            [2*(x*z - w*y), 2*(y*z + w*x), 1 - 2*(x*x + y*y)]
+        ])
+    
+    def projected_gravity(self, quat) -> np.ndarray:
+        '''
+        Return the normalized gravity vector projected into the body frame using quaternion.
+        this assumes gravity is pointing straight down
+        '''
+        w, x, y, z = quat[0], quat[1], quat[2], quat[3]
+
+        gx = 2*(x*z - w*y) * self._gravity[2]
+        gy = 2*(y*z + w*x) * self._gravity[2]
+        gz = (w*w - x*x - y*y + z*z) * self._gravity[2]
+
+        vec = np.array([gx, gy, gz])
+        norm = np.linalg.norm(vec)
+        if norm == 0:
+            return vec
+        return vec / norm
+
 
 if __name__ == '__main__':
     #=========INFO=========
-    a1 = mujoco.MjModel.from_xml_path(a1_mj_description.MJCF_PATH)
-    print(a1_mj_description.MJCF_PATH)
+    a1 = mujoco.MjModel.from_xml_path('/home/antonio/GitHub/quadruped_walking/unitree_go1/scene_torque.xml')
     data = mujoco.MjData(a1)
     
     print("Number of joints:", a1.njnt)
@@ -294,15 +323,17 @@ if __name__ == '__main__':
     print(a1.jnt_limited)
     print(a1.opt.gravity)
     print(a1.actuator_ctrlrange)
+    print(a1.key_qpos)
+
 
     #=============MINIMAL RENDER===================
-    env = A1_Env(BasicExtractor(), render_mode='human')
+    env = Go1_Env(history_length=2, render_mode='human')
     obs, info = env.reset()
 
     env.mujoco_renderer.render("human")
 
     for _ in range(2000):
-        obs, reward, terminated, truncated, info = env.step(np.random.default_rng().uniform(-33.5, 33.5, 12))
+        obs, reward, terminated, truncated, info = env.step(np.random.default_rng().uniform(-1, 1, 12))
         if terminated or truncated:
             obs, info = env.reset()
 
@@ -315,6 +346,10 @@ if __name__ == '__main__':
 
     # body_names = [mujoco.mj_id2name(a1, mujoco.mjtObj.mjOBJ_BODY, i)
     #             for i in range(a1.nbody)]
+    
+    # for i in range(a1.ngeom):
+    #     print(i, mujoco.mj_id2name(a1, mujoco.mjtObj.mjOBJ_GEOM, i),
+    #         a1.geom_type[i], a1.geom_size[i])
 
     # for i, name in enumerate(body_names):
     #     cfrc = data.cfrc_ext[i]
