@@ -127,6 +127,9 @@ class Go1_Env(MujocoEnv):
 
         final_obs = np.concatenate(self._obs_history)
 
+        if terminated:
+            reward -= 10000
+
         return final_obs, reward, terminated, truncated, info
     
     def reset_model(self):
@@ -233,7 +236,9 @@ class Go1_Env(MujocoEnv):
         reward = 0.0
         for i in reward_info.values():
             reward += i
- 
+
+        reward += 100 # alive
+
         return reward, reward_info
 
     @property
