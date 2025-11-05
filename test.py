@@ -9,7 +9,6 @@ def test(args):
     if not args.record:
         env = A1_Env(BasicExtractor(), render_mode='human')
         env.mujoco_renderer.render('human')
-        print('buh')
     else:
         env = A1_Env(
             BasicExtractor(),
@@ -31,7 +30,7 @@ def test(args):
         ep_reward = 0
         while True:
             action, _ = model.predict(obs, deterministic=True)
-            action = action*env._torque_scale
+            # action = action*env._torque_scale
             obs, reward, terminated, truncated, info = env.step(action)
             ep_reward += reward
             ep_len += 1

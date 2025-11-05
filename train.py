@@ -7,7 +7,9 @@ from argparse import ArgumentParser
 
 
 def make_env(**kwargs):
-    return A1_Env(observation_extractor=BasicExtractor(), **kwargs)
+    env =  A1_Env(observation_extractor=BasicExtractor(), render_mode='human', **kwargs)
+    env.mujoco_renderer.render('human')
+    return env
 
 def train(args):
     vec_env = make_vec_env(
