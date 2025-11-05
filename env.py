@@ -25,7 +25,7 @@ class Go1_Env(MujocoEnv):
         ]
     }
 
-    def __init__(self, history_length, torque_scale=3, **kwargs):
+    def __init__(self, history_length=1, torque_scale=1, **kwargs):
 
         super().__init__(
             model_path='/home/antonio/GitHub/quadruped_walking/unitree_go1/scene_torque.xml',
@@ -126,8 +126,6 @@ class Go1_Env(MujocoEnv):
         self._last_action = action
 
         final_obs = np.concatenate(self._obs_history)
-
-        print(final_obs)
 
         return final_obs, reward, terminated, truncated, info
     

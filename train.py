@@ -7,7 +7,7 @@ from argparse import ArgumentParser
 
 
 def make_env(**kwargs):
-    env =  Go1_Env(history_length=1, render_mode='human', **kwargs)
+    env =  Go1_Env(render_mode='human', **kwargs)
     env.mujoco_renderer.render('human')
     return env
 
