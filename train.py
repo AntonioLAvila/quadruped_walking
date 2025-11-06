@@ -7,8 +7,7 @@ from argparse import ArgumentParser
 
 
 def make_env(**kwargs):
-    env =  Go1_Env(render_mode='human', **kwargs)
-    env.mujoco_renderer.render('human')
+    env =  Go1_Env(torque_scale=3, **kwargs)
     return env
 
 def train(args):
@@ -49,14 +48,6 @@ def train(args):
         "MlpPolicy",
         vec_env,
         verbose=1,
-        learning_rate=1e-4,
-        n_steps=4096,
-        batch_size=256,
-        ent_coef=0.01,
-        clip_range=0.1,
-        vf_coef=0.5,
-        max_grad_norm=0.5,
-        target_kl=0.03,
         tensorboard_log=args.log_dir,
         device='cpu'
     )

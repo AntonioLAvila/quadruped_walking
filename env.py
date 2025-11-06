@@ -3,16 +3,21 @@ import numpy as np
 from gymnasium.envs.mujoco.mujoco_env import MujocoEnv
 from gymnasium.spaces import Box
 from collections import deque
-from util import (
-    dt_control,
-    dt_sim,
-    default_cam_config,
-)
 
 '''
 Credit to nimazareian on github for adapting mujoco menagerie Go1
-for torque control.
+MJCF scene and model for torque control.
 '''
+
+default_cam_config = {
+    "azimuth": 90.0,
+    "distance": 5.0,
+    "elevation": -25.0,
+    "lookat": np.array([0., 0., 0.]),
+    "fixedcamid": 0,
+    "trackbodyid": -1,
+    "type": 2,
+}
 
 
 class Go1_Env(MujocoEnv):
@@ -29,7 +34,7 @@ class Go1_Env(MujocoEnv):
 
         super().__init__(
             model_path='/home/antonio/GitHub/quadruped_walking/unitree_go1/scene_torque.xml',
-            frame_skip=int(dt_control/dt_sim),
+            frame_skip=5, # 100 Hz
             observation_space=None,
             default_camera_config=default_cam_config,
             **kwargs
@@ -65,7 +70,7 @@ class Go1_Env(MujocoEnv):
 
         # Used in reward
         self._upright = np.array([0,0,1])
-        self._v_xy_desired = np.array([1,0])
+        self._v_xy_desired = np.array([5,0])
         self._desired_yaw_rate = 0.0
         self._contact_indices = [2, 3, 5, 6, 8, 9, 11, 12] # hip and thigh
         self._hip_indices = [7, 10, 13, 16]
@@ -127,8 +132,8 @@ class Go1_Env(MujocoEnv):
 
         final_obs = np.concatenate(self._obs_history)
 
-        if terminated:
-            reward -= 10000
+        # if terminated:
+        #     reward -= 10000
 
         return final_obs, reward, terminated, truncated, info
     
@@ -157,11 +162,11 @@ class Go1_Env(MujocoEnv):
         body_quat = self.data.qpos[3:7]
         body_z_axis = self.R_from_quat(body_quat)[:, 2]
         cos_angle = np.dot(body_z_axis, self._upright)
-        if cos_angle < 0.25:
+        if cos_angle < 0.5:
             terminated = True # Bad orientation
 
         body_z = self.data.qpos[2]
-        if body_z < 0.1:
+        if body_z < 0.15:
             terminated = True # Fallen
 
         if not np.isfinite(self.state_vector()).all():
@@ -237,7 +242,7 @@ class Go1_Env(MujocoEnv):
         for i in reward_info.values():
             reward += i
 
-        reward += 100 # alive
+        # reward += 10 # alive
 
         return reward, reward_info
 
