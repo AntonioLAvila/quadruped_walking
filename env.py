@@ -5,10 +5,10 @@ from gymnasium.spaces import Box
 from collections import deque
 import os
 
-"""
+'''
 Credit to nimazareian on github for adapting mujoco menagerie Go1
 MJCF scene and model for torque control.
-"""
+'''
 
 default_cam_config = {
     "azimuth": 90.0,
@@ -38,8 +38,12 @@ class Go1_Env(MujocoEnv):
         )
 
         self.metadata = {
-            "render_modes": ["human", "rgb_array", "depth_array"],
-            "render_fps": 60,
+            'render_modes': [
+                'human',
+                'rgb_array',
+                'depth_array'
+            ],
+            'render_fps': 60
         }
 
         self._reset_rng = np.random.default_rng()
@@ -76,20 +80,20 @@ class Go1_Env(MujocoEnv):
         self._feet_air_time = np.zeros(4)
 
         self._weights = {
-            "base_v_xy": 4.0,
-            "sigma_v_xy": 1.0,
-            "base_v_z": -0.1,
-            "angular_xy": -0.05,
-            "yaw_rate": 1.0,
-            "sigma_yaw": 0.25,
-            "projected_gravity": -0.5,
-            "effort": -2e-4,
-            "joint_accel": -2.5e-7,
-            "action_rate": -1e-2,
-            "contact": -1.0,
-            "feet_air_time": 2.0,
-            "hip_q": -0.01,
-            "thigh_q": -0.01,
+            'base_v_xy': 4.0,
+            'sigma_v_xy': 1.0,
+            'base_v_z': -0.3,
+            'angular_xy': -0.05,
+            'yaw_rate': 1.0,
+            'sigma_yaw': 0.25,
+            'projected_gravity': -0.8,
+            'effort': -2e-4,
+            'joint_accel': -2.5e-7,
+            'action_rate': -1e-2,
+            'contact': -1.0,
+            'feet_air_time': 2.0,
+            'hip_q': -0.01,
+            'thigh_q': -0.01
         }
 
     def step(self, action: np.ndarray, populate_info=False):
@@ -109,18 +113,18 @@ class Go1_Env(MujocoEnv):
         terminated, truncated = self._calc_term_trunc()
         if populate_info:
             info = {
-                "speed": self.data.qvel[:3],
-                "R_WBody": self.data.qpos[3:7],
+                'speed': self.data.qvel[:3],
+                'R_WBody': self.data.qpos[3:7],
                 "distance_from_origin": np.linalg.norm(self.data.qpos[0:2], ord=2),
-                "g_proj": self.projected_gravity(self.data.qpos[3:7]),
-                **reward_info,
+                'g_proj': self.projected_gravity(self.data.qpos[3:7]),
+                **reward_info
             }
         else:
             info = {}
 
-        if self.render_mode == "human" and (self.data.time - self._last_render_time) > (
-            1.0 / self.metadata["render_fps"]
-        ):
+
+        if self.render_mode == 'human' \
+        and (self.data.time - self._last_render_time) > (1.0/self.metadata['render_fps']):
             self.render()
             self._last_render_time = self.data.time
 
@@ -182,77 +186,63 @@ class Go1_Env(MujocoEnv):
             obs_unbounded, -self._obs_clip_thresh, self._obs_clip_thresh
         )
         return obs_clipped
-
+    
     def _calc_reward(self, action: np.ndarray, g_proj) -> tuple[float, dict]:
         # https://arxiv.org/abs/2203.05194 ignore the delta t
         reward_info = {}
 
         # Base velocity xy
         d_v_xy = self._v_xy_desired - self.data.qvel[:2]
-        reward_info["base_v_xy"] = self._weights["base_v_xy"] * np.exp(
-            -np.square(d_v_xy).sum() / self._weights["sigma_v_xy"]
-        )
+        reward_info['base_v_xy'] = self._weights['base_v_xy'] * np.exp(-np.square(d_v_xy).sum()/self._weights['sigma_v_xy'])
 
         # Base velocity z
-        reward_info["base_v_z"] = self._weights["base_v_z"] * self.data.qvel[2] ** 2
+        reward_info['base_v_z'] = self._weights['base_v_z'] * self.data.qvel[2]**2
 
         # Base angular velocity xy
         w_xy = self.data.qvel[3:5]
-        reward_info["angular_xy"] = self._weights["angular_xy"] * np.square(w_xy).sum()
+        reward_info['angular_xy'] = self._weights['angular_xy'] * np.square(w_xy).sum()
 
         # Base angular velocity z
         d_yaw = self._desired_yaw_rate - self.data.qvel[5]
-        reward_info["yaw_rate"] = self._weights["yaw_rate"] * np.exp(
-            -np.square(d_yaw).sum() / self._weights["sigma_yaw"]
-        )
+        reward_info['yaw_rate'] = self._weights['yaw_rate'] * np.exp(-np.square(d_yaw).sum()/self._weights['sigma_yaw'])
 
         # Orientation
         # g_proj = self.projected_gravity(self.data.qpos[3:7])
-        reward_info["projected_gravity"] = (
-            self._weights["projected_gravity"] * np.square(g_proj[:2]).sum()
-        )
+        reward_info['projected_gravity'] = self._weights['projected_gravity'] * np.square(g_proj[:2]).sum()
 
         # Effort
-        reward_info["effort"] = self._weights["effort"] * np.square(action).sum()
+        reward_info['effort'] = self._weights['effort'] * np.square(action).sum()
 
         # Joint accel
         qddot = self.data.qacc[-12:]
-        reward_info["joint_accel"] = (
-            self._weights["joint_accel"] * np.square(qddot).sum()
-        )
+        reward_info['joint_accel'] = self._weights['joint_accel'] * np.square(qddot).sum()
 
         # Action rate
         d_action = self._last_action - action
-        reward_info["action_rate"] = (
-            self._weights["action_rate"] * np.square(d_action).sum()
-        )
+        reward_info['action_rate'] = self._weights['action_rate'] * np.square(d_action).sum()
 
         # Hip Thigh Contact
-        is_contact = (
-            np.linalg.norm(self.data.cfrc_ext[self._contact_indices], axis=1) > 1e-3
-        ).astype(int)
-        reward_info["contact"] = self._weights["contact"] * np.sum(is_contact)
+        is_contact = (np.linalg.norm(self.data.cfrc_ext[self._contact_indices], axis=1) > 1e-3).astype(int)
+        reward_info['contact'] = self._weights['contact'] * np.sum(is_contact)
 
         # Feet air time TODO check this again
-        reward_info["feet_air_time"] = (
-            self._weights["feet_air_time"] * self.feet_air_time_reward
-        )
+        reward_info['feet_air_time'] = self._weights['feet_air_time'] * self.feet_air_time_reward
 
-        # =======OPTIONAL==========
+        #=======OPTIONAL==========
         # Hip position
         hip_q = self.data.qpos[self._hip_indices]
         d_hip_q = self._hip_q0 - hip_q
-        reward_info["hip_q"] = self._weights["hip_q"] * np.abs(d_hip_q).sum()
+        reward_info['hip_q'] = self._weights['hip_q'] * np.abs(d_hip_q).sum()
 
         # Thigh position
         thigh_q = self.data.qpos[self._thigh_indices]
         d_thigh_q = self._thigh_q0 - thigh_q
-        reward_info["thigh_q"] = self._weights["thigh_q"] * np.abs(d_thigh_q).sum()
+        reward_info['thigh_q'] = self._weights['thigh_q'] * np.abs(d_thigh_q).sum()
 
         reward = 0.0
         for i in reward_info.values():
             reward += i
-        reward += 0.1  # alive
+        reward += 0.1 # alive
         reward *= self.dt
         reward = max(reward, 0.0)
         return reward, reward_info
@@ -294,10 +284,10 @@ class Go1_Env(MujocoEnv):
         )
 
     def projected_gravity(self, quat) -> np.ndarray:
-        """
+        '''
         Return the normalized gravity vector projected into the body frame using quaternion.
         this assumes gravity is pointing straight down
-        """
+        '''
         w, x, y, z = quat[0], quat[1], quat[2], quat[3]
 
         gx = 2 * (x * z - w * y) * self._gravity[2]
@@ -313,7 +303,7 @@ class Go1_Env(MujocoEnv):
 
 if __name__ == "__main__":
     # =========INFO=========
-    a1 = mujoco.MjModel.from_xml_path("./unitree_go1/scene_torque.xml")
+    a1 = mujoco.MjModel.from_xml_path('./unitree_go1/scene_torque.xml')
     data = mujoco.MjData(a1)
 
     print("Number of joints:", a1.njnt)
@@ -326,7 +316,7 @@ if __name__ == "__main__":
     print("Accelerations (qacc):", data.qacc)  # joint accelerations
     print("Actuator forces (ctrl):", data.ctrl)  # actuator commands
 
-    print("model time step", a1.opt.timestep)
+    print('model time step', a1.opt.timestep)
 
     joint_upper_limits = []
     joint_lower_limits = []
@@ -349,7 +339,7 @@ if __name__ == "__main__":
     print(a1.key_qpos)
 
     # =============MINIMAL RENDER===================
-    env = Go1_Env(history_length=2, render_mode="human")
+    env = Go1_Env(history_length=2, render_mode='human')
     obs, info = env.reset()
 
     env.mujoco_renderer.render("human")
