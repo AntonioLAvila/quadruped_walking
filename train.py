@@ -18,7 +18,7 @@ def train(args):
         vec_env_cls=SubprocVecEnv
     )
 
-    # vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0)
+    vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0, gamma=0.99, epsilon=1e-8)
 
     print(f"Training on {args.num_envs} envs\nSaving models to '{args.model_dir}'")
 
@@ -43,12 +43,15 @@ def train(args):
     callback = CallbackList([eval_callback, checkpoint_callback])
 
 
-    # model = PPO('MlpPolicy', vec_env, verbose=1, tensorboard_log=args.log_dir)
     model = PPO(
         "MlpPolicy",
         vec_env,
         verbose=1,
         tensorboard_log=args.log_dir,
+        learning_rate=2e-5,
+        clip_range=0.3,
+        batch_size=256,
+        ent_coef=0.001,
         device='cpu'
     )
 

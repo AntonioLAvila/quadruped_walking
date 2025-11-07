@@ -238,9 +238,8 @@ class Go1_Env(MujocoEnv):
         reward = 0.0
         for i in reward_info.values():
             reward += i
-
+        reward *= self.dt
         reward += 1 # alive
-
         return reward, reward_info
 
     @property
