@@ -3,6 +3,7 @@ import numpy as np
 from gymnasium.envs.mujoco.mujoco_env import MujocoEnv
 from gymnasium.spaces import Box
 from collections import deque
+import os
 
 '''
 Credit to nimazareian on github for adapting mujoco menagerie Go1
@@ -33,7 +34,7 @@ class Go1_Env(MujocoEnv):
     def __init__(self, history_length=1, torque_scale=1, **kwargs):
 
         super().__init__(
-            model_path='/home/antonio/GitHub/quadruped_walking/unitree_go1/scene_torque.xml',
+            model_path=os.path.join(os.path.dirname(__file__), "unitree_go1", "scene_torque.xml"),
             frame_skip=5, # 100 Hz
             observation_space=None,
             default_camera_config=default_cam_config,

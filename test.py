@@ -8,7 +8,6 @@ from tqdm import tqdm
 def test(args):
     if not args.record:
         env = Go1_Env(torque_scale=3, render_mode='human')
-        env.mujoco_renderer.render('human')
     else:
         env = Go1_Env(
             torque_scale=3,
@@ -58,7 +57,7 @@ if __name__ == '__main__':
 
     parser.add_argument('--record', type=bool, required=False, default=False)
     parser.add_argument('--num_episodes', type=str, required=False, default=1)
-    parser.add_argument('--output', type=str, required=False, default='osidjfsiodf') # TODO fix this
+    parser.add_argument('--output', type=str, required=False, default='videos')
     args = parser.parse_args()
 
     test(args)

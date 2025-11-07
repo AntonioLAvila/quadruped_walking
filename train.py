@@ -18,7 +18,7 @@ def train(args):
         vec_env_cls=SubprocVecEnv
     )
 
-    vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0, gamma=0.99, epsilon=1e-8)
+    # vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0, gamma=0.99, epsilon=1e-8)
 
     print(f"Training on {args.num_envs} envs\nSaving models to '{args.model_dir}'")
 
@@ -26,8 +26,7 @@ def train(args):
         vec_env,
         best_model_save_path=args.model_dir,
         log_path=args.log_dir,
-        eval_freq=args.eval_freq,
-        n_eval_episodes=5,
+        eval_freq=args.eval_freq//args.num_envs,
         deterministic=True,
         render=False,
     )
@@ -35,9 +34,8 @@ def train(args):
     checkpoint_callback = CheckpointCallback(
         save_freq=args.eval_freq//args.num_envs,
         save_path=args.model_dir,
-        name_prefix="ppo_checkpoint",
-        save_replay_buffer=False,
-        save_vecnormalize=False
+        name_prefix="ckpt",
+        save_vecnormalize=True
     )
 
     callback = CallbackList([eval_callback, checkpoint_callback])
@@ -63,6 +61,7 @@ def train(args):
     )
     
     model.save(f"{args.model_dir}/final_model")
+    vec_env.close()
 
 
 if __name__ == '__main__':
@@ -70,9 +69,9 @@ if __name__ == '__main__':
     parser.add_argument('--num_envs', type=int, required=True)
     parser.add_argument('--num_steps', type=int, required=True)
     parser.add_argument('--model_dir', type=str, required=True)
-    parser.add_argument('--log_dir', type=str, required=True)
     parser.add_argument('--eval_freq', type=int, required=True)
 
+    parser.add_argument('--log_dir', type=str, required=False, default=None)
     parser.add_argument('--seed', type=int, required=False, default=0)
     args = parser.parse_args()
 
