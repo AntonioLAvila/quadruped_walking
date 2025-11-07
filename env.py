@@ -86,18 +86,18 @@ class Go1_Env(MujocoEnv):
         self._feet_air_time = np.zeros(4)
 
         self._weights = {
-            'base_v_xy': 2.0,
+            'base_v_xy': 5.0,
             'sigma_v_xy': 0.25,
-            'base_v_z': -1.0,
+            'base_v_z': -2.0,
             'angular_xy': -0.05,
-            'yaw_rate': 0.5,
+            'yaw_rate': 1.0,
             'sigma_yaw': 0.25,
             'projected_gravity': -1.0,
             'effort': -2e-4,
             'joint_accel': -2.5e-7,
             'action_rate': -0.01,
             'contact': -1.0,
-            'feet_air_time': 2.0,
+            'feet_air_time': 4.0,
             'hip_q': -1.0,
             'thigh_q': -1.0
         }
@@ -159,11 +159,11 @@ class Go1_Env(MujocoEnv):
         body_quat = self.data.qpos[3:7]
         body_z_axis = self.R_from_quat(body_quat)[:, 2]
         cos_angle = np.dot(body_z_axis, self._upright)
-        if cos_angle < 0.5:
+        if cos_angle < 0.6:
             terminated = True # Bad orientation
 
         body_z = self.data.qpos[2]
-        if body_z < 0.15:
+        if body_z < 0.2:
             terminated = True # Fallen
 
         if not np.isfinite(self.state_vector()).all():
@@ -238,8 +238,8 @@ class Go1_Env(MujocoEnv):
         reward = 0.0
         for i in reward_info.values():
             reward += i
+        reward += 10 # alive
         reward *= self.dt
-        reward += 1 # alive
         return reward, reward_info
 
     @property
@@ -258,7 +258,7 @@ class Go1_Env(MujocoEnv):
         self._feet_air_time += self.dt
 
         # Award the feets that have just finished their stride (first step with contact)
-        air_time_reward = np.sum((self._feet_air_time - 0.25) * first_contact)
+        air_time_reward = np.sum((self._feet_air_time - 0.5) * first_contact)
         # No award if the desired velocity is very low (i.e. robot should remain stationary and feet shouldn't move)
         air_time_reward *= np.linalg.norm(self._v_xy_desired) > 0.1
 

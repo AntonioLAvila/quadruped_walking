@@ -1,5 +1,5 @@
 from gymnasium.wrappers import RecordVideo
-from env import A1_Env, BasicExtractor
+from env import Go1_Env
 from argparse import ArgumentParser
 from stable_baselines3 import PPO
 from tqdm import tqdm
@@ -7,11 +7,11 @@ from tqdm import tqdm
 
 def test(args):
     if not args.record:
-        env = A1_Env(BasicExtractor(), render_mode='human')
+        env = Go1_Env(torque_scale=3, render_mode='human')
         env.mujoco_renderer.render('human')
     else:
-        env = A1_Env(
-            BasicExtractor(),
+        env = Go1_Env(
+            torque_scale=3,
             render_mode='rgb_array',
             camera_name='tracking',
             width=1920,
@@ -30,7 +30,6 @@ def test(args):
         ep_reward = 0
         while True:
             action, _ = model.predict(obs, deterministic=True)
-            # action = action*env._torque_scale
             obs, reward, terminated, truncated, info = env.step(action)
             ep_reward += reward
             ep_len += 1
