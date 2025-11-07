@@ -71,7 +71,7 @@ class Go1_Env(MujocoEnv):
 
         # Used in reward
         self._upright = np.array([0,0,1])
-        self._v_xy_desired = np.array([5,0])
+        self._v_xy_desired = np.array([1.5,0])
         self._desired_yaw_rate = 0.0
         self._contact_indices = [2, 3, 5, 6, 8, 9, 11, 12] # hip and thigh
         self._hip_indices = [7, 10, 13, 16]
@@ -87,28 +87,29 @@ class Go1_Env(MujocoEnv):
         self._feet_air_time = np.zeros(4)
 
         self._weights = {
-            'base_v_xy': 5.0,
-            'sigma_v_xy': 0.25,
-            'base_v_z': -2.0,
+            'base_v_xy': 4.0,
+            'sigma_v_xy': 1.0,
+            'base_v_z': -0.1,
             'angular_xy': -0.05,
             'yaw_rate': 1.0,
             'sigma_yaw': 0.25,
-            'projected_gravity': -1.0,
+            'projected_gravity': -0.5,
             'effort': -2e-4,
             'joint_accel': -2.5e-7,
-            'action_rate': -0.01,
+            'action_rate': -1e-2,
             'contact': -1.0,
-            'feet_air_time': 4.0,
-            'hip_q': -1.0,
-            'thigh_q': -1.0
+            'feet_air_time': 2.0,
+            'hip_q': -0.01,
+            'thigh_q': -0.01
         }
         
     def step(self, action: np.ndarray):
         self._step += 1 # update for keeping time
 
-        send_action = np.clip(action*self._torque_scale, -1.0, 1.0)
+        scaled_action = self._torque_scale * action
+        clipped_action = np.clip(scaled_action, -1.0, 1.0)
 
-        self.do_simulation(send_action, self.frame_skip) # step simulator
+        self.do_simulation(clipped_action, self.frame_skip) # step simulator
 
         # add observation to history
         obs = self._calc_obs()
@@ -117,7 +118,7 @@ class Go1_Env(MujocoEnv):
         reward, reward_info = self._calc_reward(action)
         terminated, truncated = self._calc_term_trunc()
         info = {
-            'p_WBody': self.data.qpos[:3],
+            'speed': self.data.qvel[:3],
             'R_WBody': self.data.qpos[3:7],
             "distance_from_origin": np.linalg.norm(self.data.qpos[0:2], ord=2),
             'g_proj': self.projected_gravity(self.data.qpos[3:7]),
@@ -186,26 +187,23 @@ class Go1_Env(MujocoEnv):
         reward_info = {}
 
         # Base velocity xy
-        v_xy = self.data.qvel[:2]
-        d_v_xy = self._v_xy_desired - v_xy
+        d_v_xy = self._v_xy_desired - self.data.qvel[:2]
         reward_info['base_v_xy'] = self._weights['base_v_xy'] * np.exp(-np.square(d_v_xy).sum()/self._weights['sigma_v_xy'])
 
         # Base velocity z
-        v_z = self.data.qvel[2]
-        reward_info['base_v_z'] = self._weights['base_v_z'] * v_z**2
+        reward_info['base_v_z'] = self._weights['base_v_z'] * self.data.qvel[2]**2
 
         # Base angular velocity xy
         w_xy = self.data.qvel[3:5]
         reward_info['angular_xy'] = self._weights['angular_xy'] * np.square(w_xy).sum()
 
         # Base angular velocity z
-        w_z = self.data.qvel[5]
-        d_yaw = self._desired_yaw_rate - w_z
+        d_yaw = self._desired_yaw_rate - self.data.qvel[5]
         reward_info['yaw_rate'] = self._weights['yaw_rate'] * np.exp(-np.square(d_yaw).sum()/self._weights['sigma_yaw'])
 
         # Orientation
-        quat = self.data.qpos[3:7]
-        reward_info['projected_gravity'] = self._weights['projected_gravity'] * np.square(self.projected_gravity(quat)[:2]).sum()
+        g_proj = self.projected_gravity(self.data.qpos[3:7])
+        reward_info['projected_gravity'] = self._weights['projected_gravity'] * np.square(g_proj[:2]).sum()
 
         # Effort
         reward_info['effort'] = self._weights['effort'] * np.square(action).sum()
@@ -239,8 +237,9 @@ class Go1_Env(MujocoEnv):
         reward = 0.0
         for i in reward_info.values():
             reward += i
-        reward += 10 # alive
+        reward += 0.1 # alive
         reward *= self.dt
+        reward = max(reward, 0.0)
         return reward, reward_info
 
     @property

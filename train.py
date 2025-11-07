@@ -7,7 +7,7 @@ from argparse import ArgumentParser
 
 
 def make_env(**kwargs):
-    env =  Go1_Env(torque_scale=3, **kwargs)
+    env =  Go1_Env(torque_scale=1, **kwargs)
     return env
 
 def train(args):

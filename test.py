@@ -3,11 +3,12 @@ from env import Go1_Env
 from argparse import ArgumentParser
 from stable_baselines3 import PPO
 from tqdm import tqdm
+import time
 
 
 def test(args):
     if not args.record:
-        env = Go1_Env(torque_scale=3, render_mode='human')
+        env = Go1_Env(torque_scale=1, render_mode='human')
     else:
         env = Go1_Env(
             torque_scale=3,
@@ -37,6 +38,7 @@ def test(args):
                 print(k, ' : ', v)
             print('\n')
 
+            time.sleep(0.01)
 
             if terminated or truncated:
                 print(f"{ep_len=}  {ep_reward=}")
@@ -53,7 +55,7 @@ def test(args):
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--model_path', type=str, required=True)
+    parser.add_argument('--model_path', type=str, required=False, default='buh/test1.zip')
 
     parser.add_argument('--record', type=bool, required=False, default=False)
     parser.add_argument('--num_episodes', type=str, required=False, default=1)
