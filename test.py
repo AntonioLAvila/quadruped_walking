@@ -55,7 +55,7 @@ def test(args):
 
 if __name__ == '__main__':
     parser = ArgumentParser()
-    parser.add_argument('--model_path', type=str, required=False, default='buh/test1.zip')
+    parser.add_argument('--model_path', type=str, required=False, default='buh/guh.zip')
 
     parser.add_argument('--record', type=bool, required=False, default=False)
     parser.add_argument('--num_episodes', type=str, required=False, default=1)
