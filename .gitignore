@@ -2,5 +2,9 @@
 __pycache__
 buh
 buh2
+<<<<<<< HEAD
 checkpoints
 log
+=======
+checkpoints
+>>>>>>> 426a4c3 (checkpoint gitignore)
