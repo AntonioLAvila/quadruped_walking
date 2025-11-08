@@ -8,19 +8,19 @@ import time
 
 def test(args):
     if not args.record:
-        env = Go1_Env(torque_scale=1, render_mode='human')
+        env = Go1_Env(torque_scale=1, render_mode="human")
     else:
         env = Go1_Env(
             torque_scale=1,
             render_mode='rgb_array',
             camera_name='tracking',
             width=1920,
-            height=1080
+            height=1080,
         )
         env = RecordVideo(env, video_folder=args.output)
-    
+
     model = PPO.load(path=args.model_path, env=env, verbose=1)
-    
+
     total_reward = 0
     total_length = 0
     for _ in tqdm(range(int(args.num_episodes))):
@@ -30,13 +30,13 @@ def test(args):
         ep_reward = 0
         while True:
             action, _ = model.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = env.step(action)
+            obs, reward, terminated, truncated, info = env.step(action, True)
             ep_reward += reward
             ep_len += 1
-            print('----------Info--------')
-            for k,v in info.items():
-                print(k, ' : ', v)
-            print('\n')
+            print("----------Info--------")
+            for k, v in info.items():
+                print(k, " : ", v)
+            print("\n")
 
             time.sleep(0.25/15) # ITS NOT A MAGIC NUMBER I SWEAR
 
@@ -53,7 +53,7 @@ def test(args):
     env.close()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument('--model_path', type=str, required=True)
 
