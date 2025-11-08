@@ -8,6 +8,8 @@ import os
 '''
 Credit to nimazareian on github for adapting mujoco menagerie Go1
 MJCF scene and model for torque control.
+
+jump run thing commit: 44b224419b5845415acfbd45b6917194eb22386f
 '''
 
 default_cam_config = {
