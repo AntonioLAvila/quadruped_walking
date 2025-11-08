@@ -47,20 +47,24 @@ class Go1_Env(MujocoEnv):
             'render_modes': ['human', 'rgb_array', 'depth_array'],
             'render_fps': 60,
         }
+        self._torque_scale = torque_scale
+        self._history_len = history_length
+
 
         self._reset_rng = np.random.default_rng()
         self._max_episode_time = 15.0  # seconds
         self._gravity = np.array(self.model.opt.gravity)
-        self._torque_scale = torque_scale
 
         # observation stuff
         self._g_proj = np.zeros(3) # NOTE stateful. must be defined before _calc_obs
         self._last_action = np.zeros(12)  # NOTE stateful. must be defined before _calc_obs
-        self._obs_history = deque(maxlen=history_length)
-        self._history_len = history_length
-        self._obs_clip_thresh = 100.0
-        obs_shape = self._calc_obs().shape
-        obs_shape = (obs_shape[0] * history_length,)
+        self._obs_clip_thresh = 100.0 # must be defined before _calc_obs
+        self._single_obs_shape = self._calc_obs().shape
+        self._obs_history = deque(
+            [np.zeros(self._single_obs_shape) for _ in range(self._history_len)],
+            maxlen=self._history_len
+        )
+        obs_shape = (self._single_obs_shape[0] * history_length,)
         self.observation_space = Box(
             low=-np.inf,
             high=np.inf,
@@ -151,7 +155,7 @@ class Go1_Env(MujocoEnv):
         # reset stateful things
         self._g_proj = self.projected_gravity(self.data.qpos[3:7])
         self._step = 0
-        self._obs_history.clear()
+        self._obs_history.extend([np.zeros(self._single_obs_shape) for _ in range(self._history_len)])
         self._last_render_time = -1.0
         self._last_action = np.zeros(12)
         self._last_contacts = np.zeros(4)
