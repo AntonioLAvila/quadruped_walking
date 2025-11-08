@@ -25,14 +25,18 @@ default_cam_config = {
 
 class Go1_Env(MujocoEnv):
 
-    metadata = {"render_modes": ["human", "rgb_array", "depth_array"]}
+    metadata = {
+        "render_modes": [
+            "human",
+            "rgb_array", 
+            "depth_array"
+        ]
+    }
 
     def __init__(self, history_length=1, torque_scale=1, **kwargs):
 
         super().__init__(
-            model_path=os.path.join(
-                os.path.dirname(__file__), "unitree_go1", "scene_torque.xml"
-            ),
+            model_path=os.path.join(os.path.dirname(__file__), "unitree_go1", "scene_torque.xml"),
             frame_skip=5,  # 100 Hz
             observation_space=None,
             default_camera_config=default_cam_config,
@@ -50,18 +54,22 @@ class Go1_Env(MujocoEnv):
         self._torque_scale = torque_scale
 
         # observation stuff
-        self._last_action = np.zeros(12)  # must be defined before calling _calc_obs
+        self._g_proj = np.zeros(3) # NOTE stateful. must be defined before _calc_obs
+        self._last_action = np.zeros(12)  # NOTE stateful. must be defined before _calc_obs
         self._obs_history = deque(maxlen=history_length)
         self._history_len = history_length
         self._obs_clip_thresh = 100.0
-        obs_shape = self._calc_obs(np.zeros(3)).shape
-        # obs_shape = (obs_shape[0] * history_length,)
+        obs_shape = self._calc_obs().shape
+        obs_shape = (obs_shape[0] * history_length,)
         self.observation_space = Box(
-            low=-np.inf, high=np.inf, shape=obs_shape, dtype=np.float64
+            low=-np.inf,
+            high=np.inf,
+            shape=obs_shape,
+            dtype=np.float64
         )
 
         # Used in reward
-        self._upright = np.array([0, 0, 1])
+        self._upright = np.array([0, 0, 1.0])
         self._v_xy_desired = np.array([1.5, 0])
         self._desired_yaw_rate = 0.0
         self._contact_indices = [2, 3, 5, 6, 8, 9, 11, 12]  # hip and thigh
@@ -97,17 +105,19 @@ class Go1_Env(MujocoEnv):
     def step(self, action: np.ndarray, populate_info=False):
         self._step += 1  # update for keeping time
 
+        # calc action
         scaled_action = self._torque_scale * action
         clipped_action = np.clip(scaled_action, -1.0, 1.0)
 
-        self.do_simulation(clipped_action, self.frame_skip)  # step simulator
+        # step simulator and g_proj
+        self.do_simulation(clipped_action, self.frame_skip)  
+        self._g_proj = self.projected_gravity(self.data.qpos[3:7])
 
         # add observation to history
-        g_proj = self.projected_gravity(self.data.qpos[3:7])
-        obs = self._calc_obs(g_proj)
+        obs = self._calc_obs()
         self._obs_history.append(obs)
 
-        reward, reward_info = self._calc_reward(action, g_proj)
+        reward, reward_info = self._calc_reward(action)
         terminated, truncated = self._calc_term_trunc()
         if populate_info:
             info = {
@@ -120,9 +130,8 @@ class Go1_Env(MujocoEnv):
         else:
             info = {}
 
-        if self.render_mode == 'human' and (self.data.time - self._last_render_time) > (
-            1.0 / self.metadata['render_fps']
-        ):
+        if self.render_mode == 'human' \
+         and (self.data.time - self._last_render_time) > (1.0 / self.metadata['render_fps']):
             self.render()
             self._last_render_time = self.data.time
 
@@ -137,11 +146,10 @@ class Go1_Env(MujocoEnv):
         noise = np.concatenate(([0] * 7, self._reset_rng.uniform(-0.05, 0.05, 12)))
         self.data.qpos[:] = self.model.key_qpos[0] + noise
 
-        self.data.ctrl[:] = self.model.key_ctrl[
-            0
-        ] + 0.1 * self.np_random.standard_normal(*self.data.ctrl.shape)
-        g_proj = self.projected_gravity(self.data.qpos[3:7])
-
+        self.data.ctrl[:] = self.model.key_ctrl[0] + 0.1 * self.np_random.standard_normal(*self.data.ctrl.shape)
+        
+        # reset stateful things
+        self._g_proj = self.projected_gravity(self.data.qpos[3:7])
         self._step = 0
         self._obs_history.clear()
         self._last_render_time = -1.0
@@ -149,7 +157,7 @@ class Go1_Env(MujocoEnv):
         self._last_contacts = np.zeros(4)
         self._feet_air_time = np.zeros(4)
 
-        obs = self._calc_obs(g_proj)
+        obs = self._calc_obs()
         self._obs_history.append(obs)
 
         return np.concatenate(self._obs_history)
@@ -174,18 +182,13 @@ class Go1_Env(MujocoEnv):
 
         return terminated, truncated
 
-    def _calc_obs(self, g_proj):
+    def _calc_obs(self):
         o_and_q = self.data.qpos[3:]
-        # g_proj = self.projected_gravity(self.data.qpos[3:7])
-        obs_unbounded = np.concatenate(
-            (o_and_q, self.data.qvel, g_proj, self._last_action)
-        )
-        obs_clipped = np.clip(
-            obs_unbounded, -self._obs_clip_thresh, self._obs_clip_thresh
-        )
+        obs_unbounded = np.concatenate((o_and_q, self.data.qvel, self._g_proj, self._last_action))
+        obs_clipped = np.clip(obs_unbounded, -self._obs_clip_thresh, self._obs_clip_thresh)
         return obs_clipped
     
-    def _calc_reward(self, action: np.ndarray, g_proj) -> tuple[float, dict]:
+    def _calc_reward(self, action: np.ndarray) -> tuple[float, dict]:
         # https://arxiv.org/abs/2203.05194 ignore the delta t
         reward_info = {}
 
@@ -210,7 +213,7 @@ class Go1_Env(MujocoEnv):
 
         # Orientation
         # g_proj = self.projected_gravity(self.data.qpos[3:7])
-        reward_info['projected_gravity'] = self._weights['projected_gravity'] * np.square(g_proj[:2]).sum()
+        reward_info['projected_gravity'] = self._weights['projected_gravity'] * np.square(self._g_proj[:2]).sum()
 
         # Effort
         reward_info['effort'] = self._weights['effort'] * np.square(action).sum()
