@@ -40,12 +40,8 @@ class Go1_Env(MujocoEnv):
         )
 
         self.metadata = {
-            'render_modes': [
-                'human',
-                'rgb_array',
-                'depth_array'
-            ],
-            'render_fps': 60
+            'render_modes': ['human', 'rgb_array', 'depth_array'],
+            'render_fps': 60,
         }
 
         self._reset_rng = np.random.default_rng()
@@ -117,16 +113,16 @@ class Go1_Env(MujocoEnv):
             info = {
                 'speed': self.data.qvel[:3],
                 'R_WBody': self.data.qpos[3:7],
-                "distance_from_origin": np.linalg.norm(self.data.qpos[0:2], ord=2),
+                'distance_from_origin': np.linalg.norm(self.data.qpos[0:2], ord=2),
                 'g_proj': self.projected_gravity(self.data.qpos[3:7]),
-                **reward_info
+                **reward_info,
             }
         else:
             info = {}
 
-
-        if self.render_mode == 'human' \
-        and (self.data.time - self._last_render_time) > (1.0/self.metadata['render_fps']):
+        if self.render_mode == 'human' and (self.data.time - self._last_render_time) > (
+            1.0 / self.metadata['render_fps']
+        ):
             self.render()
             self._last_render_time = self.data.time
 
@@ -195,10 +191,12 @@ class Go1_Env(MujocoEnv):
 
         # Base velocity xy
         d_v_xy = self._v_xy_desired - self.data.qvel[:2]
-        reward_info['base_v_xy'] = self._weights['base_v_xy'] * np.exp(-np.square(d_v_xy).sum()/self._weights['sigma_v_xy'])
+        reward_info['base_v_xy'] = self._weights['base_v_xy'] * np.exp(
+            -np.square(d_v_xy).sum() / self._weights['sigma_v_xy']
+        )
 
         # Base velocity z
-        reward_info['base_v_z'] = self._weights['base_v_z'] * self.data.qvel[2]**2
+        reward_info['base_v_z'] = self._weights['base_v_z'] * self.data.qvel[2] ** 2
 
         # Base angular velocity xy
         w_xy = self.data.qvel[3:5]
@@ -206,7 +204,9 @@ class Go1_Env(MujocoEnv):
 
         # Base angular velocity z
         d_yaw = self._desired_yaw_rate - self.data.qvel[5]
-        reward_info['yaw_rate'] = self._weights['yaw_rate'] * np.exp(-np.square(d_yaw).sum()/self._weights['sigma_yaw'])
+        reward_info['yaw_rate'] = self._weights['yaw_rate'] * np.exp(
+            -np.square(d_yaw).sum() / self._weights['sigma_yaw']
+        )
 
         # Orientation
         # g_proj = self.projected_gravity(self.data.qpos[3:7])
@@ -248,7 +248,7 @@ class Go1_Env(MujocoEnv):
         reward *= self.dt
         reward = max(reward, 0.0)
         return reward, reward_info
-
+    
     @property
     def feet_air_time_reward(self) -> float:
         feet_contact_forces = self.data.cfrc_ext[self._feet_indices]
@@ -303,9 +303,9 @@ class Go1_Env(MujocoEnv):
         return vec / norm
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     # =========INFO=========
-    a1 = mujoco.MjModel.from_xml_path('./unitree_go1/scene_torque.xml')
+    a1 = mujoco.MjModel.from_xml_path("./unitree_go1/scene_torque.xml")
     data = mujoco.MjData(a1)
 
     print("Number of joints:", a1.njnt)
