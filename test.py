@@ -8,10 +8,15 @@ import time
 
 def test(args):
     if not args.record:
-        env = Go1_Env(torque_scale=1, render_mode="human")
+        env = Go1_Env(
+            torque_scale=args.torque_scale,
+            history_length=args.history_length,
+            render_mode="human"
+        )
     else:
         env = Go1_Env(
-            torque_scale=1,
+            torque_scale=args.torque_scale,
+            history_length=args.history_length,
             render_mode='rgb_array',
             camera_name='tracking',
             width=1920,
@@ -56,9 +61,11 @@ def test(args):
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument('--model_path', type=str, required=True)
+    parser.add_argument('--torque_scale', type=int, required=True)
+    parser.add_argument('--history_length', type=int, required=True)
 
     parser.add_argument('--record', type=bool, required=False, default=False)
-    parser.add_argument('--num_episodes', type=str, required=False, default=1)
+    parser.add_argument('--num_episodes', type=int, required=False, default=1)
     parser.add_argument('--output', type=str, required=False, default='videos')
     args = parser.parse_args()
 

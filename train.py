@@ -14,12 +14,16 @@ import torch
 torch.set_num_threads(1)
 
 
-def make_env(**kwargs):
-    env = Go1_Env(torque_scale=1, **kwargs)
-    return env
-
-
 def train(args):
+
+    def make_env(**kwargs):
+        env = Go1_Env(
+            torque_scale=args.torque_scale,
+            history_length=args.history_length,
+            **kwargs
+        )
+        return env
+
     vec_env = make_vec_env(
         make_env, n_envs=args.num_envs, seed=args.seed, vec_env_cls=SubprocVecEnv
     )
@@ -53,21 +57,10 @@ def train(args):
         tensorboard_log=args.log_dir,
         learning_rate=2e-5,
         clip_range=0.3,
-        batch_size=2048,
+        batch_size=256,
         ent_coef=0.001,
-        device="cpu",
+        device='cpu'
     )
-    # model = PPO(
-    #     "MlpPolicy",
-    #     vec_env,
-    #     verbose=1,
-    #     tensorboard_log=args.log_dir,
-    #     learning_rate=3e-4,  # saner default; faster learning
-    #     clip_range=0.2,
-    #     batch_size=2048,  # big batches = good GPU utilization
-    #     ent_coef=0.0,  # tune as needed
-    #     device="cuda",  # key change
-    # )
 
     model.learn(
         total_timesteps=args.num_steps,
@@ -82,12 +75,14 @@ def train(args):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--num_envs", type=int, required=False, default=14)
-    parser.add_argument("--num_steps", type=int, required=False, default=100000000)
-    parser.add_argument("--model_dir", type=str, required=False, default="checkpoints")
-    parser.add_argument("--eval_freq", type=int, required=False, default=5000000)
+    parser.add_argument("--num_steps", type=int, required=True)
+    parser.add_argument("--model_dir", type=str, required=True)
+    parser.add_argument("--eval_freq", type=int, required=True)
+    parser.add_argument("--torque_scale", type=int, required=True)
+    parser.add_argument("--history_length", type=int, required=True)
 
-    parser.add_argument("--log_dir", type=str, required=False, default="log")
+    parser.add_argument("--num_envs", type=int, required=False, default=12)
+    parser.add_argument("--log_dir", type=str, required=False, default=None)
     parser.add_argument("--seed", type=int, required=False, default=0)
     args = parser.parse_args()
 
