@@ -11,7 +11,7 @@ def test(args):
         env = Go1_Env(torque_scale=1, render_mode='human')
     else:
         env = Go1_Env(
-            torque_scale=3,
+            torque_scale=1,
             render_mode='rgb_array',
             camera_name='tracking',
             width=1920,
@@ -38,7 +38,7 @@ def test(args):
                 print(k, ' : ', v)
             print('\n')
 
-            time.sleep(0.01)
+            time.sleep(0.25/15) # ITS NOT A MAGIC NUMBER I SWEAR
 
             if terminated or truncated:
                 print(f"{ep_len=}  {ep_reward=}")
@@ -55,9 +55,9 @@ def test(args):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument('--model_path', type=str, required=False, default='buh/test.zip')
+    parser.add_argument('--model_path', type=str, required=False, default='/home/antonio/Desktop/buh/test.zip')
 
-    parser.add_argument('--record', type=bool, required=False, default=False)
+    parser.add_argument('--record', type=bool, required=False, default=True)
     parser.add_argument('--num_episodes', type=str, required=False, default=1)
     parser.add_argument('--output', type=str, required=False, default='videos')
     args = parser.parse_args()
