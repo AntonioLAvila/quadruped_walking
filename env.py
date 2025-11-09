@@ -135,7 +135,7 @@ class Go1_Env(MujocoEnv):
             info = {}
 
         if self.render_mode == 'human' \
-         and (self.data.time - self._last_render_time) > (1.0 / self.metadata['render_fps']):
+        and (self.data.time - self._last_render_time) > (1.0 / self.metadata['render_fps']):
             self.render()
             self._last_render_time = self.data.time
 
