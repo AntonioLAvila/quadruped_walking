@@ -55,23 +55,6 @@ class Go1_Env(MujocoEnv):
         self._max_episode_time = 15.0  # seconds
         self._gravity = np.array(self.model.opt.gravity)
 
-        # observation stuff
-        self._g_proj = np.zeros(3) # NOTE stateful. must be defined before _calc_obs
-        self._last_action = np.zeros(12)  # NOTE stateful. must be defined before _calc_obs
-        self._obs_clip_thresh = 100.0 # must be defined before _calc_obs
-        self._single_obs_shape = self._calc_obs().shape
-        self._obs_history = deque(
-            [np.zeros(self._single_obs_shape) for _ in range(self._history_len)],
-            maxlen=self._history_len
-        )
-        obs_shape = (self._single_obs_shape[0] * history_length,)
-        self.observation_space = Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=obs_shape,
-            dtype=np.float64
-        )
-
         # Used in reward
         self._upright = np.array([0, 0, 1.0])
         self._v_xy_desired = np.array([1.5, 0])
@@ -88,15 +71,17 @@ class Go1_Env(MujocoEnv):
         self._last_render_time = -1.0
         self._last_contacts = np.zeros(4)
         self._feet_air_time = np.zeros(4)
+        self._g_proj = np.zeros(3)
+        self._last_action = np.zeros(12)
 
         self._weights = {
             'base_v_xy': 4.0,
             'sigma_v_xy': 1.0,
-            'base_v_z': -0.3,
+            'base_v_z': -2.0,
             'angular_xy': -0.05,
             'yaw_rate': 1.0,
             'sigma_yaw': 0.25,
-            'projected_gravity': -0.8,
+            'projected_gravity': -1.0,
             'effort': -2e-4,
             'joint_accel': -2.5e-7,
             'action_rate': -1e-2,
@@ -105,6 +90,27 @@ class Go1_Env(MujocoEnv):
             'hip_q': -0.01,
             'thigh_q': -0.01
         }
+
+        self._obs_weights = {
+            'v': 2.0,
+            'w': 0.25,
+            'qd': 0.05
+        }
+
+        # observation stuff NOTE defined at end because of call to calc obs
+        self._obs_clip_thresh = 100.0 # must be defined before _calc_obs
+        self._single_obs_shape = self._calc_obs().shape
+        self._obs_history = deque(
+            [np.zeros(self._single_obs_shape) for _ in range(self._history_len)],
+            maxlen=self._history_len
+        )
+        obs_shape = (self._single_obs_shape[0] * history_length,)
+        self.observation_space = Box(
+            low=-np.inf,
+            high=np.inf,
+            shape=obs_shape,
+            dtype=np.float64
+        )
 
     def step(self, action: np.ndarray, populate_info=False):
         self._step += 1  # update for keeping time
@@ -135,7 +141,7 @@ class Go1_Env(MujocoEnv):
             info = {}
 
         if self.render_mode == 'human' \
-         and (self.data.time - self._last_render_time) > (1.0 / self.metadata['render_fps']):
+        and (self.data.time - self._last_render_time) > (1.0 / self.metadata['render_fps']):
             self.render()
             self._last_render_time = self.data.time
 
@@ -187,8 +193,12 @@ class Go1_Env(MujocoEnv):
         return terminated, truncated
 
     def _calc_obs(self):
-        o_and_q = self.data.qpos[3:]
-        obs_unbounded = np.concatenate((o_and_q, self.data.qvel, self._g_proj, self._last_action))
+        q = self.data.qpos[-12:]
+        qd = self.data.qvel[-12:] * self._obs_weights['qd']
+        v = self.data.qvel[:3] * self._obs_weights['v']
+        w = self.data.qvel[3:6] * self._obs_weights['w']
+
+        obs_unbounded = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
         obs_clipped = np.clip(obs_unbounded, -self._obs_clip_thresh, self._obs_clip_thresh)
         return obs_clipped
     

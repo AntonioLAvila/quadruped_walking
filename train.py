@@ -27,7 +27,7 @@ def train(args):
     vec_env = make_vec_env(
         make_env, n_envs=args.num_envs, seed=args.seed, vec_env_cls=SubprocVecEnv
     )
-
+    
     # vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0, gamma=0.99, epsilon=1e-8)
 
     print(f"Training on {args.num_envs} envs\nSaving models to '{args.model_dir}'")
