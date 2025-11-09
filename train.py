@@ -28,8 +28,6 @@ def train(args):
         make_env, n_envs=args.num_envs, seed=args.seed, vec_env_cls=SubprocVecEnv
     )
     
-    eval_freq = int(round((args.eval_freq // args.num_envs) / 1_000_000) * 1_000_000)
-
     # vec_env = VecNormalize(vec_env, norm_obs=True, norm_reward=True, clip_obs=10.0, gamma=0.99, epsilon=1e-8)
 
     print(f"Training on {args.num_envs} envs\nSaving models to '{args.model_dir}'")
@@ -38,13 +36,13 @@ def train(args):
         vec_env,
         best_model_save_path=args.model_dir,
         log_path=args.log_dir,
-        eval_freq=eval_freq,
+        eval_freq=args.eval_freq // args.num_envs,
         deterministic=True,
         render=False,
     )
 
     checkpoint_callback = CheckpointCallback(
-        save_freq=eval_freq,
+        save_freq=args.eval_freq // args.num_envs,
         save_path=args.model_dir,
         name_prefix="ckpt",
         save_vecnormalize=True,
