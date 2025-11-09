@@ -92,11 +92,11 @@ class Go1_Env(MujocoEnv):
         self._weights = {
             'base_v_xy': 4.0,
             'sigma_v_xy': 1.0,
-            'base_v_z': -0.3,
+            'base_v_z': -2.0,
             'angular_xy': -0.05,
             'yaw_rate': 1.0,
             'sigma_yaw': 0.25,
-            'projected_gravity': -0.8,
+            'projected_gravity': -1.0,
             'effort': -2e-4,
             'joint_accel': -2.5e-7,
             'action_rate': -1e-2,
