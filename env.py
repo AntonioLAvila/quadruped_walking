@@ -187,8 +187,8 @@ class Go1_Env(MujocoEnv):
         return terminated, truncated
 
     def _calc_obs(self):
-        o_and_q = self.data.qpos[3:]
-        obs_unbounded = np.concatenate((o_and_q, self.data.qvel, self._g_proj, self._last_action))
+        q = self.data.qpos[7:]
+        obs_unbounded = np.concatenate((q, self.data.qvel, self._g_proj, self._last_action))
         obs_clipped = np.clip(obs_unbounded, -self._obs_clip_thresh, self._obs_clip_thresh)
         return obs_clipped
     
