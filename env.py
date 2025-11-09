@@ -87,8 +87,8 @@ class Go1_Env(MujocoEnv):
             'action_rate': -1e-3,
             'contact': -1.0,
             'feet_air_time': 2.0,
-            'hip_q': -0.01,
-            'thigh_q': -0.01
+            'hip_q': -0.1,
+            'thigh_q': -0.1
         }
 
         self._obs_weights = {
