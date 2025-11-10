@@ -65,6 +65,7 @@ class Go1_Env(MujocoEnv):
         self._hip_q0 = self.model.key_qpos[0][self._hip_indices]
         self._thigh_q0 = self.model.key_qpos[0][self._thigh_indices]
         self._feet_indices = [4, 7, 10, 13]
+        self._feet_geom_ids = [20, 31, 43, 55]
 
         # Stateful things
         self._step = 0
@@ -89,7 +90,7 @@ class Go1_Env(MujocoEnv):
             'feet_air_time': 2.0,
             'hip_q': -1.0,
             'thigh_q': -1.0,
-            'diagonal_feet': 0.0
+            'diagonal_feet': 1.5
         }
 
         self._obs_weights = {
@@ -314,6 +315,16 @@ class Go1_Env(MujocoEnv):
         if np.abs(v_diff).sum() < 0.5:
             return diag_reward
         return 0
+    
+    @property
+    def dragging_feet_reward(self) -> float:
+        reward = 0.0
+
+        feet_locations = self.data.geom_xpos[self._feet_geom_ids]
+        for foot_location in feet_locations:
+            if foot_location[2] < 0.05:
+                reward += 1
+        
 
     @staticmethod
     def R_from_quat(quat) -> np.ndarray:
@@ -347,39 +358,39 @@ class Go1_Env(MujocoEnv):
 if __name__ == '__main__':
     # =========INFO=========
     a1 = mujoco.MjModel.from_xml_path("./unitree_go1/scene_torque.xml")
-    # data = mujoco.MjData(a1)
+    data = mujoco.MjData(a1)
 
-    # print("Number of joints:", a1.njnt)
-    # print("Number of actuators:", a1.nu)
-    # print("Number of bodies:", a1.nbody)
-    # print("Number of velocities:", a1.nv)
+    print("Number of joints:", a1.njnt)
+    print("Number of actuators:", a1.nu)
+    print("Number of bodies:", a1.nbody)
+    print("Number of velocities:", a1.nv)
 
-    # print("Positions (qpos):", data.qpos)  # joint positions
-    # print("Velocities (qvel):", data.qvel)  # joint velocities
-    # print("Accelerations (qacc):", data.qacc)  # joint accelerations
-    # print("Actuator forces (ctrl):", data.ctrl)  # actuator commands
+    print("Positions (qpos):", data.qpos)  # joint positions
+    print("Velocities (qvel):", data.qvel)  # joint velocities
+    print("Accelerations (qacc):", data.qacc)  # joint accelerations
+    print("Actuator forces (ctrl):", data.ctrl)  # actuator commands
 
-    # print('model time step', a1.opt.timestep)
+    print('model time step', a1.opt.timestep)
 
-    # joint_upper_limits = []
-    # joint_lower_limits = []
-    # for i in range(a1.njnt):
-    #     name = mujoco.mj_id2name(a1, mujoco.mjtObj.mjOBJ_JOINT, i)
-    #     joint_type = a1.jnt_type[i]  # 0=free, 1=ball, 2=slide, 3=hinge
-    #     range_ = a1.jnt_range[i]
-    #     joint_lower_limits.append(float(range_[0]))
-    #     joint_upper_limits.append(float(range_[1]))
-    #     damping = a1.dof_damping[i] if i < len(a1.dof_damping) else None
+    joint_upper_limits = []
+    joint_lower_limits = []
+    for i in range(a1.njnt):
+        name = mujoco.mj_id2name(a1, mujoco.mjtObj.mjOBJ_JOINT, i)
+        joint_type = a1.jnt_type[i]  # 0=free, 1=ball, 2=slide, 3=hinge
+        range_ = a1.jnt_range[i]
+        joint_lower_limits.append(float(range_[0]))
+        joint_upper_limits.append(float(range_[1]))
+        damping = a1.dof_damping[i] if i < len(a1.dof_damping) else None
 
-    #     print(
-    #         f"Joint {i}: {name}, type={joint_type}, range={range_}, damping={damping}"
-    #     )
+        print(
+            f"Joint {i}: {name}, type={joint_type}, range={range_}, damping={damping}"
+        )
 
-    # print(joint_lower_limits, "\n", joint_upper_limits)
-    # print(a1.jnt_limited)
-    # print(a1.opt.gravity)
-    # print(a1.actuator_ctrlrange)
-    # print(a1.key_qpos)
+    print(joint_lower_limits, "\n", joint_upper_limits)
+    print(a1.jnt_limited)
+    print(a1.opt.gravity)
+    print(a1.actuator_ctrlrange)
+    print(a1.key_qpos)
 
     # =============MINIMAL RENDER===================
     # env = Go1_Env(history_length=2, render_mode='human')
@@ -399,15 +410,17 @@ if __name__ == '__main__':
     # =============BODY NAMES=======================
     data = mujoco.MjData(a1)
 
-    mujoco.mj_step(a1, data)
+    print(data.geom_xpos[[1,2,3,4]])
 
-    body_names = [mujoco.mj_id2name(a1, mujoco.mjtObj.mjOBJ_BODY, i)
-                for i in range(a1.nbody)]
+    # mujoco.mj_step(a1, data)
 
-    for i in range(a1.ngeom):
-        print(i, mujoco.mj_id2name(a1, mujoco.mjtObj.mjOBJ_GEOM, i),
-            a1.geom_type[i], a1.geom_size[i])
+    # body_names = [mujoco.mj_id2name(a1, mujoco.mjtObj.mjOBJ_BODY, i)
+    #             for i in range(a1.nbody)]
 
-    for i, name in enumerate(body_names):
-        cfrc = data.cfrc_ext[i]
-        print(f"Body: {name}, CFRC: {cfrc}")
+    # for i in range(a1.ngeom):
+    #     print(i, mujoco.mj_id2name(a1, mujoco.mjtObj.mjOBJ_GEOM, i),
+    #         a1.geom_type[i], a1.geom_size[i])
+
+    # for i, name in enumerate(body_names):
+    #     cfrc = data.cfrc_ext[i]
+    #     print(f"Body: {name}, CFRC: {cfrc}")
