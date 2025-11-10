@@ -88,7 +88,8 @@ class Go1_Env(MujocoEnv):
             'contact': -1.0,
             'feet_air_time': 2.0,
             'hip_q': -1.0,
-            'thigh_q': -1.0
+            'thigh_q': -1.0,
+            'diagonal_feet': 0.0
         }
 
         self._obs_weights = {
@@ -226,7 +227,6 @@ class Go1_Env(MujocoEnv):
         )
 
         # Orientation
-        # g_proj = self.projected_gravity(self.data.qpos[3:7])
         reward_info['projected_gravity'] = self._weights['projected_gravity'] * np.square(self._g_proj[:2]).sum()
 
         # Effort
@@ -244,8 +244,11 @@ class Go1_Env(MujocoEnv):
         is_contact = (np.linalg.norm(self.data.cfrc_ext[self._contact_indices], axis=1) > 1e-3).astype(int)
         reward_info['contact'] = self._weights['contact'] * np.sum(is_contact)
 
-        # Feet air time TODO check this again
+        # Feet air time
         reward_info['feet_air_time'] = self._weights['feet_air_time'] * self.feet_air_time_reward
+
+        # Diagonal feet in contact
+        reward_info['diagonal_feet'] = self._weights['diagonal_feet'] * self.diagonal_feet_reward
 
         #=======OPTIONAL==========
         # Hip position
@@ -258,10 +261,9 @@ class Go1_Env(MujocoEnv):
         d_thigh_q = self._thigh_q0 - thigh_q
         reward_info['thigh_q'] = self._weights['thigh_q'] * np.abs(d_thigh_q).sum()
 
-        reward = 0.0
+        reward = 0.1 # alive
         for i in reward_info.values():
             reward += i
-        reward += 0.1 # alive
         reward *= self.dt
         reward = max(reward, 0.0)
         return reward, reward_info
@@ -290,6 +292,28 @@ class Go1_Env(MujocoEnv):
         self._feet_air_time *= ~contact_filter
 
         return air_time_reward
+    
+    @property
+    def diagonal_feet_reward(self) -> float:
+        feet_contact_forces = self.data.cfrc_ext[self._feet_indices]
+        feet_contact_mag = np.linalg.norm(feet_contact_forces, axis=1)
+
+        contacts = (feet_contact_mag > 1.0).astype(bool)
+
+        C_FR = contacts[0]
+        C_FL = contacts[1]
+        C_RR = contacts[2]
+        C_RL = contacts[3]
+
+        diag1 = C_FL * C_RR
+        diag2 = C_FR * C_RL
+
+        diag_reward = diag1 ^ diag2
+
+        v_diff = self._v_xy_desired - self.data.qvel[:2]
+        if np.abs(v_diff).sum() < 0.5:
+            return diag_reward
+        return 0
 
     @staticmethod
     def R_from_quat(quat) -> np.ndarray:
@@ -323,67 +347,67 @@ class Go1_Env(MujocoEnv):
 if __name__ == '__main__':
     # =========INFO=========
     a1 = mujoco.MjModel.from_xml_path("./unitree_go1/scene_torque.xml")
-    data = mujoco.MjData(a1)
-
-    print("Number of joints:", a1.njnt)
-    print("Number of actuators:", a1.nu)
-    print("Number of bodies:", a1.nbody)
-    print("Number of velocities:", a1.nv)
-
-    print("Positions (qpos):", data.qpos)  # joint positions
-    print("Velocities (qvel):", data.qvel)  # joint velocities
-    print("Accelerations (qacc):", data.qacc)  # joint accelerations
-    print("Actuator forces (ctrl):", data.ctrl)  # actuator commands
-
-    print('model time step', a1.opt.timestep)
-
-    joint_upper_limits = []
-    joint_lower_limits = []
-    for i in range(a1.njnt):
-        name = mujoco.mj_id2name(a1, mujoco.mjtObj.mjOBJ_JOINT, i)
-        joint_type = a1.jnt_type[i]  # 0=free, 1=ball, 2=slide, 3=hinge
-        range_ = a1.jnt_range[i]
-        joint_lower_limits.append(float(range_[0]))
-        joint_upper_limits.append(float(range_[1]))
-        damping = a1.dof_damping[i] if i < len(a1.dof_damping) else None
-
-        print(
-            f"Joint {i}: {name}, type={joint_type}, range={range_}, damping={damping}"
-        )
-
-    print(joint_lower_limits, "\n", joint_upper_limits)
-    print(a1.jnt_limited)
-    print(a1.opt.gravity)
-    print(a1.actuator_ctrlrange)
-    print(a1.key_qpos)
-
-    # =============MINIMAL RENDER===================
-    env = Go1_Env(history_length=2, render_mode='human')
-    obs, info = env.reset()
-
-    env.mujoco_renderer.render("human")
-
-    for _ in range(2000):
-        obs, reward, terminated, truncated, info = env.step(
-            np.random.default_rng().uniform(-1, 1, 12)
-        )
-        if terminated or truncated:
-            obs, info = env.reset()
-
-    env.close()
-
-    # =============BODY NAMES=======================
     # data = mujoco.MjData(a1)
 
-    # mujoco.mj_step(a1, data)
+    # print("Number of joints:", a1.njnt)
+    # print("Number of actuators:", a1.nu)
+    # print("Number of bodies:", a1.nbody)
+    # print("Number of velocities:", a1.nv)
 
-    # body_names = [mujoco.mj_id2name(a1, mujoco.mjtObj.mjOBJ_BODY, i)
-    #             for i in range(a1.nbody)]
+    # print("Positions (qpos):", data.qpos)  # joint positions
+    # print("Velocities (qvel):", data.qvel)  # joint velocities
+    # print("Accelerations (qacc):", data.qacc)  # joint accelerations
+    # print("Actuator forces (ctrl):", data.ctrl)  # actuator commands
 
-    # for i in range(a1.ngeom):
-    #     print(i, mujoco.mj_id2name(a1, mujoco.mjtObj.mjOBJ_GEOM, i),
-    #         a1.geom_type[i], a1.geom_size[i])
+    # print('model time step', a1.opt.timestep)
 
-    # for i, name in enumerate(body_names):
-    #     cfrc = data.cfrc_ext[i]
-    #     print(f"Body: {name}, CFRC: {cfrc}")
+    # joint_upper_limits = []
+    # joint_lower_limits = []
+    # for i in range(a1.njnt):
+    #     name = mujoco.mj_id2name(a1, mujoco.mjtObj.mjOBJ_JOINT, i)
+    #     joint_type = a1.jnt_type[i]  # 0=free, 1=ball, 2=slide, 3=hinge
+    #     range_ = a1.jnt_range[i]
+    #     joint_lower_limits.append(float(range_[0]))
+    #     joint_upper_limits.append(float(range_[1]))
+    #     damping = a1.dof_damping[i] if i < len(a1.dof_damping) else None
+
+    #     print(
+    #         f"Joint {i}: {name}, type={joint_type}, range={range_}, damping={damping}"
+    #     )
+
+    # print(joint_lower_limits, "\n", joint_upper_limits)
+    # print(a1.jnt_limited)
+    # print(a1.opt.gravity)
+    # print(a1.actuator_ctrlrange)
+    # print(a1.key_qpos)
+
+    # =============MINIMAL RENDER===================
+    # env = Go1_Env(history_length=2, render_mode='human')
+    # obs, info = env.reset()
+
+    # env.mujoco_renderer.render("human")
+
+    # for _ in range(2000):
+    #     obs, reward, terminated, truncated, info = env.step(
+    #         np.random.default_rng().uniform(-1, 1, 12)
+    #     )
+    #     if terminated or truncated:
+    #         obs, info = env.reset()
+
+    # env.close()
+
+    # =============BODY NAMES=======================
+    data = mujoco.MjData(a1)
+
+    mujoco.mj_step(a1, data)
+
+    body_names = [mujoco.mj_id2name(a1, mujoco.mjtObj.mjOBJ_BODY, i)
+                for i in range(a1.nbody)]
+
+    for i in range(a1.ngeom):
+        print(i, mujoco.mj_id2name(a1, mujoco.mjtObj.mjOBJ_GEOM, i),
+            a1.geom_type[i], a1.geom_size[i])
+
+    for i, name in enumerate(body_names):
+        cfrc = data.cfrc_ext[i]
+        print(f"Body: {name}, CFRC: {cfrc}")
