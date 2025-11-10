@@ -88,8 +88,8 @@ class Go1_Env(MujocoEnv):
             'action_rate': -1e-3,
             'contact': -1.0,
             'feet_air_time': 2.0,
-            'hip_q': -0.1,
-            'thigh_q': -0.5,
+            'hip_q': -1.0,
+            'thigh_q': -1.0,
             'diagonal_feet': 0.0,
             'dragging_feet': 0.0
         }
