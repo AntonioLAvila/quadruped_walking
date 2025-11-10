@@ -83,14 +83,15 @@ class Go1_Env(MujocoEnv):
             'yaw_rate': 1.0,
             'sigma_yaw': 0.25,
             'projected_gravity': -2.0,
-            'effort': -2e-4,
+            'effort': -2e-5,
             'joint_accel': -2.5e-7,
             'action_rate': -1e-3,
             'contact': -1.0,
             'feet_air_time': 2.0,
-            'hip_q': -1.0,
-            'thigh_q': -1.0,
-            'diagonal_feet': 1.5
+            'hip_q': -0.1,
+            'thigh_q': -0.5,
+            'diagonal_feet': 0.0,
+            'dragging_feet': 0.0
         }
 
         self._obs_weights = {
@@ -251,6 +252,9 @@ class Go1_Env(MujocoEnv):
         # Diagonal feet in contact
         reward_info['diagonal_feet'] = self._weights['diagonal_feet'] * self.diagonal_feet_reward
 
+        # Dragging feet
+        reward_info['dragging_feet'] = self._weights['dragging_feet'] * self.dragging_feet_reward
+
         #=======OPTIONAL==========
         # Hip position
         hip_q = self.data.qpos[self._hip_indices]
@@ -311,19 +315,22 @@ class Go1_Env(MujocoEnv):
 
         diag_reward = diag1 ^ diag2
 
-        v_diff = self._v_xy_desired - self.data.qvel[:2]
-        if np.abs(v_diff).sum() < 0.5:
+        if np.linalg.norm(self.data.qvel[:2]) > 0.25:
             return diag_reward
         return 0
     
     @property
     def dragging_feet_reward(self) -> float:
         reward = 0.0
-
         feet_locations = self.data.geom_xpos[self._feet_geom_ids]
+        
         for foot_location in feet_locations:
-            if foot_location[2] < 0.05:
+            if foot_location[2] < 0.07:
                 reward += 1
+
+        if np.linalg.norm(self.data.qvel[:2]) > 0.25:
+            return reward
+        return 0
         
 
     @staticmethod
