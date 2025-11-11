@@ -65,6 +65,7 @@ class Go1_Env(MujocoEnv):
         self._hip_q0 = self.model.key_qpos[0][self._hip_indices]
         self._thigh_q0 = self.model.key_qpos[0][self._thigh_indices]
         self._feet_indices = [4, 7, 10, 13]
+        self._feet_geom_ids = [20, 31, 43, 55]
 
         # Stateful things
         self._step = 0
@@ -82,13 +83,15 @@ class Go1_Env(MujocoEnv):
             'yaw_rate': 1.0,
             'sigma_yaw': 0.25,
             'projected_gravity': -1.0,
-            'effort': -2e-4,
+            'effort': -1e-3,
             'joint_accel': -2.5e-7,
             'action_rate': -1e-2,
             'contact': -1.0,
             'feet_air_time': 2.0,
-            'hip_q': -0.01,
-            'thigh_q': -0.01
+            'hip_q': -0.1,
+            'thigh_q': -0.1,
+            'diagonal_feet': 0.0,
+            'dragging_feet': -0.0
         }
 
         self._obs_weights = {
@@ -226,7 +229,6 @@ class Go1_Env(MujocoEnv):
         )
 
         # Orientation
-        # g_proj = self.projected_gravity(self.data.qpos[3:7])
         reward_info['projected_gravity'] = self._weights['projected_gravity'] * np.square(self._g_proj[:2]).sum()
 
         # Effort
@@ -244,8 +246,14 @@ class Go1_Env(MujocoEnv):
         is_contact = (np.linalg.norm(self.data.cfrc_ext[self._contact_indices], axis=1) > 1e-3).astype(int)
         reward_info['contact'] = self._weights['contact'] * np.sum(is_contact)
 
-        # Feet air time TODO check this again
+        # Feet air time
         reward_info['feet_air_time'] = self._weights['feet_air_time'] * self.feet_air_time_reward
+
+        # Diagonal feet in contact
+        # reward_info['diagonal_feet'] = self._weights['diagonal_feet'] * self.diagonal_feet_reward
+
+        # # Dragging feet
+        reward_info['dragging_feet'] = self._weights['dragging_feet'] * self.dragging_feet_reward
 
         #=======OPTIONAL==========
         # Hip position
@@ -258,10 +266,9 @@ class Go1_Env(MujocoEnv):
         d_thigh_q = self._thigh_q0 - thigh_q
         reward_info['thigh_q'] = self._weights['thigh_q'] * np.abs(d_thigh_q).sum()
 
-        reward = 0.0
+        reward = 0.1 # alive
         for i in reward_info.values():
             reward += i
-        reward += 0.1 # alive
         reward *= self.dt
         reward = max(reward, 0.0)
         return reward, reward_info
@@ -290,6 +297,41 @@ class Go1_Env(MujocoEnv):
         self._feet_air_time *= ~contact_filter
 
         return air_time_reward
+    
+    @property
+    def diagonal_feet_reward(self) -> float:
+        feet_contact_forces = self.data.cfrc_ext[self._feet_indices]
+        feet_contact_mag = np.linalg.norm(feet_contact_forces, axis=1)
+
+        contacts = (feet_contact_mag > 1.0).astype(bool)
+
+        C_FR = contacts[0]
+        C_FL = contacts[1]
+        C_RR = contacts[2]
+        C_RL = contacts[3]
+
+        diag1 = C_FL * C_RR
+        diag2 = C_FR * C_RL
+
+        diag_reward = diag1 ^ diag2
+
+        if np.linalg.norm(self.data.qvel[:2]) > 0.25:
+            return diag_reward
+        return 0
+    
+    @property
+    def dragging_feet_reward(self) -> float:
+        reward = 0.0
+        feet_locations = self.data.geom_xpos[self._feet_geom_ids]
+        
+        for foot_location in feet_locations:
+            if foot_location[2] < 0.07:
+                reward += 1
+
+        if np.linalg.norm(self.data.qvel[:2]) > 0.25:
+            return reward
+        return 0
+        
 
     @staticmethod
     def R_from_quat(quat) -> np.ndarray:
@@ -358,22 +400,24 @@ if __name__ == '__main__':
     print(a1.key_qpos)
 
     # =============MINIMAL RENDER===================
-    env = Go1_Env(history_length=2, render_mode='human')
-    obs, info = env.reset()
+    # env = Go1_Env(history_length=2, render_mode='human')
+    # obs, info = env.reset()
 
-    env.mujoco_renderer.render("human")
+    # env.mujoco_renderer.render("human")
 
-    for _ in range(2000):
-        obs, reward, terminated, truncated, info = env.step(
-            np.random.default_rng().uniform(-1, 1, 12)
-        )
-        if terminated or truncated:
-            obs, info = env.reset()
+    # for _ in range(2000):
+    #     obs, reward, terminated, truncated, info = env.step(
+    #         np.random.default_rng().uniform(-1, 1, 12)
+    #     )
+    #     if terminated or truncated:
+    #         obs, info = env.reset()
 
-    env.close()
+    # env.close()
 
     # =============BODY NAMES=======================
-    # data = mujoco.MjData(a1)
+    data = mujoco.MjData(a1)
+
+    print(data.geom_xpos[[1,2,3,4]])
 
     # mujoco.mj_step(a1, data)
 

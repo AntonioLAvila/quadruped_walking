@@ -61,9 +61,9 @@ def test(args):
 if __name__ == "__main__":
     parser = ArgumentParser()
     parser.add_argument('--model_path', type=str, required=True)
-    parser.add_argument('--torque_scale', type=int, required=True)
     parser.add_argument('--history_length', type=int, required=True)
 
+    parser.add_argument('--torque_scale', type=float, required=False, default=1.0)
     parser.add_argument('--record', type=bool, required=False, default=False)
     parser.add_argument('--num_episodes', type=int, required=False, default=1)
     parser.add_argument('--output', type=str, required=False, default='videos')
