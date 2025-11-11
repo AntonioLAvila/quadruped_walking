@@ -78,20 +78,20 @@ class Go1_Env(MujocoEnv):
         self._weights = {
             'base_v_xy': 4.0,
             'sigma_v_xy': 1.0,
-            'base_v_z': -3.0,
+            'base_v_z': -2.0,
             'angular_xy': -0.05,
             'yaw_rate': 1.0,
             'sigma_yaw': 0.25,
-            'projected_gravity': -2.0,
-            'effort': -2e-5,
+            'projected_gravity': -1.0,
+            'effort': -1e-3,
             'joint_accel': -2.5e-7,
-            'action_rate': -1e-3,
+            'action_rate': -1e-2,
             'contact': -1.0,
             'feet_air_time': 2.0,
-            'hip_q': -1.0,
-            'thigh_q': -1.0,
+            'hip_q': -0.1,
+            'thigh_q': -0.1,
             'diagonal_feet': 0.0,
-            'dragging_feet': 0.0
+            'dragging_feet': -0.0
         }
 
         self._obs_weights = {
@@ -250,9 +250,9 @@ class Go1_Env(MujocoEnv):
         reward_info['feet_air_time'] = self._weights['feet_air_time'] * self.feet_air_time_reward
 
         # Diagonal feet in contact
-        reward_info['diagonal_feet'] = self._weights['diagonal_feet'] * self.diagonal_feet_reward
+        # reward_info['diagonal_feet'] = self._weights['diagonal_feet'] * self.diagonal_feet_reward
 
-        # Dragging feet
+        # # Dragging feet
         reward_info['dragging_feet'] = self._weights['dragging_feet'] * self.dragging_feet_reward
 
         #=======OPTIONAL==========
