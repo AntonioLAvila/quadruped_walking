@@ -57,7 +57,7 @@ class Go1_Env(MujocoEnv):
 
         # Used in reward
         self._upright = np.array([0, 0, 1.0])
-        self._v_xy_desired = np.array([1.5, 0])
+        self._v_xy_desired = np.array([3.0, 0])
         self._desired_yaw_rate = 0.0
         self._contact_indices = [2, 3, 5, 6, 8, 9, 11, 12]  # hip and thigh
         self._hip_indices = [7, 10, 13, 16]
@@ -78,7 +78,7 @@ class Go1_Env(MujocoEnv):
 
         self._weights = {
             'base_v_xy': 4.0,
-            'sigma_v_xy': 1.0,
+            'sigma_v_xy': 3.5,
             'base_v_z': -2.0,
             'angular_xy': -0.05,
             'yaw_rate': 1.0,
@@ -89,8 +89,8 @@ class Go1_Env(MujocoEnv):
             'action_rate': -1e-2,
             'contact': -1.0,
             'feet_air_time': 3.0,
-            'hip_q': -1.0,
-            'thigh_q': -1.0,
+            'hip_q': -0.5,
+            'thigh_q': -0.5,
             'dragging_feet': -0.1 # NOTE not used
         }
 
@@ -295,7 +295,7 @@ class Go1_Env(MujocoEnv):
         self._feet_air_time += self.dt
 
         # Award the feets that have just finished their stride (first step with contact)
-        air_time_reward = np.sum((self._feet_air_time - 0.2) * first_contact)
+        air_time_reward = np.sum((self._feet_air_time - 0.5) * first_contact)
         # No award if the desired velocity is very low (i.e. robot should remain stationary and feet shouldn't move)
         air_time_reward *= np.linalg.norm(self._v_xy_desired) > 0.1
 
