@@ -24,7 +24,7 @@ def test(args):
         )
         env = RecordVideo(env, video_folder=args.output)
 
-    model = PPO.load(path=args.model_path, env=env, verbose=1)
+    model = PPO.load(path=args.model_path, env=env, verbose=1, device='cpu')
 
     total_reward = 0
     total_length = 0
@@ -35,13 +35,13 @@ def test(args):
         ep_reward = 0
         while True:
             action, _ = model.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = env.step(action, True)
+            obs, reward, terminated, truncated, info = env.step(action, populate_info=True, kick_robot=False)
             ep_reward += reward
             ep_len += 1
-            print("----------Info--------")
-            for k, v in info.items():
-                print(k, " : ", v)
-            print("\n")
+            # print("----------Info--------")
+            # for k, v in info.items():
+            #     print(k, " : ", v)
+            # print("\n")
 
             time.sleep(0.25/15) # ITS NOT A MAGIC NUMBER I SWEAR
 

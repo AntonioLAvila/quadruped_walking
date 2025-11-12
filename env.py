@@ -51,7 +51,7 @@ class Go1_Env(MujocoEnv):
         self._history_len = history_length
 
 
-        self._reset_rng = np.random.default_rng()
+        self._rng = np.random.default_rng()
         self._max_episode_time = 15.0  # seconds
         self._gravity = np.array(self.model.opt.gravity)
 
@@ -74,6 +74,7 @@ class Go1_Env(MujocoEnv):
         self._feet_air_time = np.zeros(4)
         self._g_proj = np.zeros(3)
         self._last_action = np.zeros(12)
+        self._last_kick_time = 0.0
 
         self._weights = {
             'base_v_xy': 4.0,
@@ -83,15 +84,14 @@ class Go1_Env(MujocoEnv):
             'yaw_rate': 1.0,
             'sigma_yaw': 0.25,
             'projected_gravity': -1.0,
-            'effort': -1e-3,
+            'effort': -2e-4,
             'joint_accel': -2.5e-7,
             'action_rate': -1e-2,
             'contact': -1.0,
             'feet_air_time': 2.0,
-            'hip_q': -0.1,
+            'hip_q': -1.0,
             'thigh_q': -0.1,
-            'diagonal_feet': 0.0,
-            'dragging_feet': -0.0
+            'dragging_feet': -0.1 # NOTE not used
         }
 
         self._obs_weights = {
@@ -115,7 +115,7 @@ class Go1_Env(MujocoEnv):
             dtype=np.float64
         )
 
-    def step(self, action: np.ndarray, populate_info=False):
+    def step(self, action: np.ndarray, populate_info=False, kick_robot=True):
         self._step += 1  # update for keeping time
 
         # calc action
@@ -125,6 +125,14 @@ class Go1_Env(MujocoEnv):
         # step simulator and g_proj
         self.do_simulation(clipped_action, self.frame_skip)  
         self._g_proj = self.projected_gravity(self.data.qpos[3:7])
+
+        # maybe kick the robot
+        if kick_robot:
+            current_time = self._step*self.dt
+            if current_time - self._last_kick_time > 3.0 and current_time > 5.0:
+                if self._rng.random() < 0.2:
+                    self.kick_robot()
+                    self._last_kick_time = current_time
 
         # add observation to history
         obs = self._calc_obs()
@@ -156,7 +164,7 @@ class Go1_Env(MujocoEnv):
 
     def reset_model(self):
         # No noise on floating base
-        noise = np.concatenate(([0] * 7, self._reset_rng.uniform(-0.05, 0.05, 12)))
+        noise = np.concatenate(([0] * 7, self._rng.uniform(-0.05, 0.05, 12)))
         self.data.qpos[:] = self.model.key_qpos[0] + noise
 
         self.data.ctrl[:] = self.model.key_ctrl[0] + 0.1 * self.np_random.standard_normal(*self.data.ctrl.shape)
@@ -169,6 +177,7 @@ class Go1_Env(MujocoEnv):
         self._last_action = np.zeros(12)
         self._last_contacts = np.zeros(4)
         self._feet_air_time = np.zeros(4)
+        self._last_kick_time = 0.0
 
         obs = self._calc_obs()
         self._obs_history.append(obs)
@@ -249,11 +258,8 @@ class Go1_Env(MujocoEnv):
         # Feet air time
         reward_info['feet_air_time'] = self._weights['feet_air_time'] * self.feet_air_time_reward
 
-        # Diagonal feet in contact
-        # reward_info['diagonal_feet'] = self._weights['diagonal_feet'] * self.diagonal_feet_reward
-
-        # # Dragging feet
-        reward_info['dragging_feet'] = self._weights['dragging_feet'] * self.dragging_feet_reward
+        # Dragging feet
+        # reward_info['dragging_feet'] = self._weights['dragging_feet'] * self.dragging_feet_reward
 
         #=======OPTIONAL==========
         # Hip position
@@ -298,40 +304,35 @@ class Go1_Env(MujocoEnv):
 
         return air_time_reward
     
-    @property
-    def diagonal_feet_reward(self) -> float:
-        feet_contact_forces = self.data.cfrc_ext[self._feet_indices]
-        feet_contact_mag = np.linalg.norm(feet_contact_forces, axis=1)
-
-        contacts = (feet_contact_mag > 1.0).astype(bool)
-
-        C_FR = contacts[0]
-        C_FL = contacts[1]
-        C_RR = contacts[2]
-        C_RL = contacts[3]
-
-        diag1 = C_FL * C_RR
-        diag2 = C_FR * C_RL
-
-        diag_reward = diag1 ^ diag2
-
-        if np.linalg.norm(self.data.qvel[:2]) > 0.25:
-            return diag_reward
-        return 0
+    def kick_robot(self):
+        direction = self._rng.normal(size=2)
+        norm = np.linalg.norm(direction)
+        if norm == 0:
+            return
+        direction /= np.linalg.norm(direction)
+        kick_vel = direction * self._rng.uniform(0.25, 1)
+        self.data.qvel[:2] += kick_vel
     
     @property
     def dragging_feet_reward(self) -> float:
         reward = 0.0
         feet_locations = self.data.geom_xpos[self._feet_geom_ids]
-        
-        for foot_location in feet_locations:
-            if foot_location[2] < 0.07:
-                reward += 1
+        feet_velocities = []
 
-        if np.linalg.norm(self.data.qvel[:2]) > 0.25:
-            return reward
-        return 0
-        
+        for geom_id in self._feet_geom_ids:
+            v = np.zeros(6)
+            mujoco.mj_objectVelocity(self.model, self.data, mujoco.mjtObj.mjOBJ_GEOM, geom_id, v, 0)
+            feet_velocities.append(v[:3])
+
+        feet_velocities = np.array(feet_velocities)
+
+        for loc, vel in zip(feet_locations, feet_velocities):
+            # Reward for dragging (low height but moving horizontally)
+            if loc[2] < 0.05 and np.linalg.norm(vel[:2]) > 0.02:
+                reward += 1.0
+
+        return reward
+
 
     @staticmethod
     def R_from_quat(quat) -> np.ndarray:

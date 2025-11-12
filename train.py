@@ -78,9 +78,9 @@ if __name__ == "__main__":
     parser.add_argument("--num_steps", type=int, required=True)
     parser.add_argument("--model_dir", type=str, required=True)
     parser.add_argument("--eval_freq", type=int, required=True)
-    parser.add_argument("--torque_scale", type=int, required=True)
     parser.add_argument("--history_length", type=int, required=True)
 
+    parser.add_argument("--torque_scale", type=float, required=False, default=1.0)
     parser.add_argument("--num_envs", type=int, required=False, default=12)
     parser.add_argument("--log_dir", type=str, required=False, default=None)
     parser.add_argument("--seed", type=int, required=False, default=0)
