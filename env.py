@@ -115,7 +115,7 @@ class Go1_Env(MujocoEnv):
             dtype=np.float64
         )
 
-    def step(self, action: np.ndarray, populate_info=False, kick_robot=True):
+    def step(self, action: np.ndarray, populate_info=False, kick_robot=False):
         self._step += 1  # update for keeping time
 
         # calc action
