@@ -84,13 +84,13 @@ class Go1_Env(MujocoEnv):
             'yaw_rate': 1.0,
             'sigma_yaw': 0.25,
             'projected_gravity': -1.0,
-            'effort': -2e-4,
+            'effort': -2e-3,
             'joint_accel': -2.5e-7,
             'action_rate': -1e-2,
             'contact': -1.0,
-            'feet_air_time': 2.0,
-            'hip_q': -0.01,
-            'thigh_q': -0.01,
+            'feet_air_time': 3.0,
+            'hip_q': -1.0,
+            'thigh_q': -1.0,
             'dragging_feet': -0.1 # NOTE not used
         }
 
@@ -295,7 +295,7 @@ class Go1_Env(MujocoEnv):
         self._feet_air_time += self.dt
 
         # Award the feets that have just finished their stride (first step with contact)
-        air_time_reward = np.sum((self._feet_air_time - 0.5) * first_contact)
+        air_time_reward = np.sum((self._feet_air_time - 0.2) * first_contact)
         # No award if the desired velocity is very low (i.e. robot should remain stationary and feet shouldn't move)
         air_time_reward *= np.linalg.norm(self._v_xy_desired) > 0.1
 
