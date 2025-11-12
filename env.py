@@ -107,6 +107,7 @@ class Go1_Env(MujocoEnv):
             [np.zeros(self._single_obs_shape) for _ in range(self._history_len)],
             maxlen=self._history_len
         )
+        self._last_lpf = np.zeros(self._single_obs_shape) # used for LPF/HPF
         obs_shape = (self._single_obs_shape[0] * history_length,)
         self.observation_space = Box(
             low=-np.inf,
@@ -136,7 +137,6 @@ class Go1_Env(MujocoEnv):
 
         # add observation to history
         obs = self._calc_obs()
-        self._obs_history.append(obs)
 
         reward, reward_info = self._calc_reward(action)
         terminated, truncated = self._calc_term_trunc()
@@ -158,9 +158,7 @@ class Go1_Env(MujocoEnv):
 
         self._last_action = action
 
-        final_obs = np.concatenate(self._obs_history)
-
-        return final_obs, reward, terminated, truncated, info
+        return obs, reward, terminated, truncated, info
 
     def reset_model(self):
         # No noise on floating base
@@ -172,7 +170,6 @@ class Go1_Env(MujocoEnv):
         # reset stateful things
         self._g_proj = self.projected_gravity(self.data.qpos[3:7])
         self._step = 0
-        self._obs_history.extend([np.zeros(self._single_obs_shape) for _ in range(self._history_len)])
         self._last_render_time = -1.0
         self._last_action = np.zeros(12)
         self._last_contacts = np.zeros(4)
@@ -180,7 +177,8 @@ class Go1_Env(MujocoEnv):
         self._last_kick_time = 0.0
 
         obs = self._calc_obs()
-        self._obs_history.append(obs)
+        self._last_lpf = obs.copy()
+        self._obs_history.extend([obs.copy() for _ in range(self._history_len)])
 
         return np.concatenate(self._obs_history)
 
@@ -210,9 +208,43 @@ class Go1_Env(MujocoEnv):
         v = self.data.qvel[:3] * self._obs_weights['v']
         w = self.data.qvel[3:6] * self._obs_weights['w']
 
-        obs_unbounded = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
-        obs_clipped = np.clip(obs_unbounded, -self._obs_clip_thresh, self._obs_clip_thresh)
-        return obs_clipped
+        raw_obs = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
+        obs_clipped = np.clip(raw_obs, -self._obs_clip_thresh, self._obs_clip_thresh)
+
+        self._obs_history.append(obs_clipped)
+
+        return np.concatenate(self._obs_history)
+    
+    def _calc_obs_LPF(self, alpha):
+        q = self.data.qpos[-12:]
+        qd = self.data.qvel[-12:] * self._obs_weights['qd']
+        v = self.data.qvel[:3] * self._obs_weights['v']
+        w = self.data.qvel[3:6] * self._obs_weights['w']
+
+        raw_obs = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
+        lowpassed = alpha*raw_obs + (1-alpha)*self._last_lpf[-1]
+        self._last_lpf = lowpassed
+
+        clipped = np.clip(lowpassed, -self._obs_clip_thresh, self._obs_clip_thresh)
+        self._obs_history.append(clipped) # oldest to newest left to right
+
+        return np.concatenate(self._obs_history)
+    
+    def _calc_obs_HPF(self, alpha):
+        q = self.data.qpos[-12:]
+        qd = self.data.qvel[-12:] * self._obs_weights['qd']
+        v = self.data.qvel[:3] * self._obs_weights['v']
+        w = self.data.qvel[3:6] * self._obs_weights['w']
+
+        raw_obs = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
+        lowpassed = alpha*raw_obs + (1-alpha)*self._last_lpf[-1]
+        highpassed = raw_obs + lowpassed
+        self._last_lpf = lowpassed
+
+        clipped = np.clip(highpassed, -self._obs_clip_thresh, self._obs_clip_thresh)
+        self._obs_history.append(clipped) # oldest to newest left to right
+
+        return np.concatenate(self._obs_history)
     
     def _calc_reward(self, action: np.ndarray) -> tuple[float, dict]:
         # https://arxiv.org/abs/2203.05194 ignore the delta t
