@@ -150,9 +150,9 @@ class Go1_Env(MujocoEnv):
         terminated, truncated = self._calc_term_trunc()
         if populate_info:
             info = {
-                'speed': self.data.qvel[:3],
-                'R_WBody': self.data.qpos[3:7],
-                'distance_from_origin': np.linalg.norm(self.data.qpos[0:2], ord=2),
+                'R': self.data.qpos[3:7],
+                'vel': self.data.qvel[:3],
+                'omega': self.data.qvel[3:6],
                 'g_proj': self.projected_gravity(self.data.qpos[3:7]),
                 **reward_info,
             }
