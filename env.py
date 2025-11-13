@@ -8,8 +8,6 @@ import os
 '''
 Credit to nimazareian on github for adapting mujoco menagerie Go1
 MJCF scene and model for torque control.
-
-jump run thing commit: 44b224419b5845415acfbd45b6917194eb22386f
 '''
 
 default_cam_config = {
@@ -33,7 +31,7 @@ class Go1_Env(MujocoEnv):
         ]
     }
 
-    def __init__(self, history_length=1, torque_scale=1, **kwargs):
+    def __init__(self, history_length=1, noise_type='None', alpha=0.5, torque_scale=1, **kwargs):
 
         super().__init__(
             model_path=os.path.join(os.path.dirname(__file__), "unitree_go1", "scene_torque.xml"),
@@ -49,9 +47,11 @@ class Go1_Env(MujocoEnv):
         }
         self._torque_scale = torque_scale
         self._history_len = history_length
+        self._noise_type = noise_type if noise_type is not None else 'None'
+        self._alpha = alpha
 
 
-        self._reset_rng = np.random.default_rng()
+        self._rng = np.random.default_rng()
         self._max_episode_time = 15.0  # seconds
         self._gravity = np.array(self.model.opt.gravity)
 
@@ -74,6 +74,7 @@ class Go1_Env(MujocoEnv):
         self._feet_air_time = np.zeros(4)
         self._g_proj = np.zeros(3)
         self._last_action = np.zeros(12)
+        self._last_kick_time = 0.0
 
         self._weights = {
             'base_v_xy': 4.0,
@@ -90,8 +91,7 @@ class Go1_Env(MujocoEnv):
             'feet_air_time': 2.0,
             'hip_q': -0.1,
             'thigh_q': -0.1,
-            'diagonal_feet': 0.0,
-            'dragging_feet': -0.0
+            'dragging_feet': -0.1 # NOTE unused
         }
 
         self._obs_weights = {
@@ -107,6 +107,7 @@ class Go1_Env(MujocoEnv):
             [np.zeros(self._single_obs_shape) for _ in range(self._history_len)],
             maxlen=self._history_len
         )
+        self._last_lpf = np.zeros(self._single_obs_shape) # used for LPF/HPF
         obs_shape = (self._single_obs_shape[0] * history_length,)
         self.observation_space = Box(
             low=-np.inf,
@@ -115,7 +116,7 @@ class Go1_Env(MujocoEnv):
             dtype=np.float64
         )
 
-    def step(self, action: np.ndarray, populate_info=False):
+    def step(self, action: np.ndarray, populate_info=False, kick_robot=False):
         self._step += 1  # update for keeping time
 
         # calc action
@@ -126,10 +127,25 @@ class Go1_Env(MujocoEnv):
         self.do_simulation(clipped_action, self.frame_skip)  
         self._g_proj = self.projected_gravity(self.data.qpos[3:7])
 
-        # add observation to history
-        obs = self._calc_obs()
+        # maybe kick the robot
+        if kick_robot:
+            current_time = self._step*self.dt
+            if current_time - self._last_kick_time > 3.0 and current_time > 5.0:
+                if self._rng.random() < 0.2:
+                    self.kick_robot()
+                    self._last_kick_time = current_time
+
+        # calc observation
+        match self._noise_type:
+            case 'None':
+                obs = self._calc_obs()
+            case 'LPF':
+                obs = self._calc_obs_LPF()
+            case 'HPF':
+                obs = self._calc_obs_HPF()
         self._obs_history.append(obs)
 
+        # calc reward and termination/truncation conditions
         reward, reward_info = self._calc_reward(action)
         terminated, truncated = self._calc_term_trunc()
         if populate_info:
@@ -150,13 +166,11 @@ class Go1_Env(MujocoEnv):
 
         self._last_action = action
 
-        final_obs = np.concatenate(self._obs_history)
-
-        return final_obs, reward, terminated, truncated, info
+        return np.concatenate(self._obs_history), reward, terminated, truncated, info
 
     def reset_model(self):
         # No noise on floating base
-        noise = np.concatenate(([0] * 7, self._reset_rng.uniform(-0.05, 0.05, 12)))
+        noise = np.concatenate(([0] * 7, self._rng.uniform(-0.05, 0.05, 12)))
         self.data.qpos[:] = self.model.key_qpos[0] + noise
 
         self.data.ctrl[:] = self.model.key_ctrl[0] + 0.1 * self.np_random.standard_normal(*self.data.ctrl.shape)
@@ -164,14 +178,17 @@ class Go1_Env(MujocoEnv):
         # reset stateful things
         self._g_proj = self.projected_gravity(self.data.qpos[3:7])
         self._step = 0
-        self._obs_history.extend([np.zeros(self._single_obs_shape) for _ in range(self._history_len)])
         self._last_render_time = -1.0
         self._last_action = np.zeros(12)
         self._last_contacts = np.zeros(4)
         self._feet_air_time = np.zeros(4)
+        self._last_kick_time = 0.0
 
+        # this part doesnt use noise as we assume the
+        # filter settles at this time
         obs = self._calc_obs()
-        self._obs_history.append(obs)
+        self._last_lpf = obs.copy()
+        self._obs_history.extend([obs.copy() for _ in range(self._history_len)])
 
         return np.concatenate(self._obs_history)
 
@@ -201,9 +218,49 @@ class Go1_Env(MujocoEnv):
         v = self.data.qvel[:3] * self._obs_weights['v']
         w = self.data.qvel[3:6] * self._obs_weights['w']
 
-        obs_unbounded = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
-        obs_clipped = np.clip(obs_unbounded, -self._obs_clip_thresh, self._obs_clip_thresh)
+        raw_obs = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
+        obs_clipped = np.clip(raw_obs, -self._obs_clip_thresh, self._obs_clip_thresh)
+
         return obs_clipped
+    
+    def _calc_obs_LPF(self):
+        q = self.data.qpos[-12:]
+        qd = self.data.qvel[-12:]
+        v = self.data.qvel[:3]
+        w = self.data.qvel[3:6]
+
+        raw_obs = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
+        lowpassed = self._alpha*raw_obs + (1-self._alpha)*self._last_lpf[-1]
+        self._last_lpf = lowpassed
+
+        # scale and clip
+        q = lowpassed[:12]
+        v = lowpassed[12:12+3] * self._obs_weights['v']
+        w = lowpassed[15:15+3] * self._obs_weights['w']
+        qd = lowpassed[18:18+12] * self._obs_weights['qd']
+        obs = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
+        clipped = np.clip(obs, -self._obs_clip_thresh, self._obs_clip_thresh)
+        return clipped
+    
+    def _calc_obs_HPF(self):
+        q = self.data.qpos[-12:]
+        qd = self.data.qvel[-12:]
+        v = self.data.qvel[:3]
+        w = self.data.qvel[3:6]
+
+        raw_obs = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
+        lowpassed = self._alpha*raw_obs + (1-self._alpha)*self._last_lpf[-1]
+        highpassed = raw_obs - lowpassed
+        self._last_lpf = lowpassed
+
+        # scale and clip
+        q = highpassed[:12]
+        v = highpassed[12:12+3] * self._obs_weights['v']
+        w = highpassed[15:15+3] * self._obs_weights['w']
+        qd = highpassed[18:18+12] * self._obs_weights['qd']
+        obs = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
+        clipped = np.clip(obs, -self._obs_clip_thresh, self._obs_clip_thresh)
+        return clipped
     
     def _calc_reward(self, action: np.ndarray) -> tuple[float, dict]:
         # https://arxiv.org/abs/2203.05194 ignore the delta t
@@ -249,11 +306,8 @@ class Go1_Env(MujocoEnv):
         # Feet air time
         reward_info['feet_air_time'] = self._weights['feet_air_time'] * self.feet_air_time_reward
 
-        # Diagonal feet in contact
-        # reward_info['diagonal_feet'] = self._weights['diagonal_feet'] * self.diagonal_feet_reward
-
-        # # Dragging feet
-        reward_info['dragging_feet'] = self._weights['dragging_feet'] * self.dragging_feet_reward
+        # Dragging feet
+        # reward_info['dragging_feet'] = self._weights['dragging_feet'] * self.dragging_feet_reward
 
         #=======OPTIONAL==========
         # Hip position
@@ -298,40 +352,34 @@ class Go1_Env(MujocoEnv):
 
         return air_time_reward
     
-    @property
-    def diagonal_feet_reward(self) -> float:
-        feet_contact_forces = self.data.cfrc_ext[self._feet_indices]
-        feet_contact_mag = np.linalg.norm(feet_contact_forces, axis=1)
-
-        contacts = (feet_contact_mag > 1.0).astype(bool)
-
-        C_FR = contacts[0]
-        C_FL = contacts[1]
-        C_RR = contacts[2]
-        C_RL = contacts[3]
-
-        diag1 = C_FL * C_RR
-        diag2 = C_FR * C_RL
-
-        diag_reward = diag1 ^ diag2
-
-        if np.linalg.norm(self.data.qvel[:2]) > 0.25:
-            return diag_reward
-        return 0
+    def kick_robot(self):
+        direction = self._rng.normal(size=2)
+        norm = np.linalg.norm(direction)
+        if norm == 0:
+            return
+        direction /= np.linalg.norm(direction)
+        kick_vel = direction * self._rng.uniform(0.25, 1)
+        self.data.qvel[:2] += kick_vel
     
     @property
     def dragging_feet_reward(self) -> float:
         reward = 0.0
         feet_locations = self.data.geom_xpos[self._feet_geom_ids]
-        
-        for foot_location in feet_locations:
-            if foot_location[2] < 0.07:
-                reward += 1
+        feet_velocities = []
 
-        if np.linalg.norm(self.data.qvel[:2]) > 0.25:
-            return reward
-        return 0
-        
+        for geom_id in self._feet_geom_ids:
+            v = np.zeros(6)
+            mujoco.mj_objectVelocity(self.model, self.data, mujoco.mjtObj.mjOBJ_GEOM, geom_id, v, 0)
+            feet_velocities.append(v[:3])
+
+        feet_velocities = np.array(feet_velocities)
+
+        for loc, vel in zip(feet_locations, feet_velocities):
+            if loc[2] < 0.08 and np.linalg.norm(vel[:2]) > 0.05:
+                reward += 1.0
+
+        return reward
+
 
     @staticmethod
     def R_from_quat(quat) -> np.ndarray:
