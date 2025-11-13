@@ -11,12 +11,16 @@ def test(args):
         env = Go1_Env(
             torque_scale=args.torque_scale,
             history_length=args.history_length,
+            noise_type=args.noise_type,
+            alpha=args.alpha,
             render_mode="human"
         )
     else:
         env = Go1_Env(
             torque_scale=args.torque_scale,
             history_length=args.history_length,
+            noise_type=args.noise_type,
+            alpha=args.alpha,
             render_mode='rgb_array',
             camera_name='tracking',
             width=1920,
@@ -63,6 +67,8 @@ if __name__ == "__main__":
     parser.add_argument('--model_path', type=str, required=True)
     parser.add_argument('--history_length', type=int, required=True)
 
+    parser.add_argument("--noise_type", type=str, required=False, default='None', help='None, HPF or LPF')
+    parser.add_argument("--alpha", type=float, required=False, default=0.5)
     parser.add_argument('--torque_scale', type=float, required=False, default=1.0)
     parser.add_argument('--record', type=bool, required=False, default=False)
     parser.add_argument('--num_episodes', type=int, required=False, default=1)

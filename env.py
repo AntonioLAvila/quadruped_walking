@@ -8,8 +8,6 @@ import os
 '''
 Credit to nimazareian on github for adapting mujoco menagerie Go1
 MJCF scene and model for torque control.
-
-jump run thing commit: 44b224419b5845415acfbd45b6917194eb22386f
 '''
 
 default_cam_config = {
@@ -33,7 +31,7 @@ class Go1_Env(MujocoEnv):
         ]
     }
 
-    def __init__(self, history_length=1, torque_scale=1, **kwargs):
+    def __init__(self, history_length=1, noise_type='None', alpha=0.5, torque_scale=1, **kwargs):
 
         super().__init__(
             model_path=os.path.join(os.path.dirname(__file__), "unitree_go1", "scene_torque.xml"),
@@ -49,6 +47,8 @@ class Go1_Env(MujocoEnv):
         }
         self._torque_scale = torque_scale
         self._history_len = history_length
+        self._noise_type = noise_type if noise_type is not None else 'None'
+        self._alpha = alpha
 
 
         self._rng = np.random.default_rng()
@@ -57,7 +57,7 @@ class Go1_Env(MujocoEnv):
 
         # Used in reward
         self._upright = np.array([0, 0, 1.0])
-        self._v_xy_desired = np.array([3.0, 0])
+        self._v_xy_desired = np.array([1.5, 0])
         self._desired_yaw_rate = 0.0
         self._contact_indices = [2, 3, 5, 6, 8, 9, 11, 12]  # hip and thigh
         self._hip_indices = [7, 10, 13, 16]
@@ -78,20 +78,20 @@ class Go1_Env(MujocoEnv):
 
         self._weights = {
             'base_v_xy': 4.0,
-            'sigma_v_xy': 3.5,
+            'sigma_v_xy': 1.0,
             'base_v_z': -2.0,
             'angular_xy': -0.05,
             'yaw_rate': 1.0,
             'sigma_yaw': 0.25,
             'projected_gravity': -1.0,
-            'effort': -2e-3,
+            'effort': -1e-3,
             'joint_accel': -2.5e-7,
             'action_rate': -1e-2,
             'contact': -1.0,
-            'feet_air_time': 3.0,
-            'hip_q': -0.5,
-            'thigh_q': -0.5,
-            'dragging_feet': -0.1 # NOTE not used
+            'feet_air_time': 2.0,
+            'hip_q': -0.1,
+            'thigh_q': -0.1,
+            'dragging_feet': -0.1 # NOTE unused
         }
 
         self._obs_weights = {
@@ -135,9 +135,17 @@ class Go1_Env(MujocoEnv):
                     self.kick_robot()
                     self._last_kick_time = current_time
 
-        # add observation to history
-        obs = self._calc_obs()
+        # calc observation
+        match self._noise_type:
+            case 'None':
+                obs = self._calc_obs()
+            case 'LPF':
+                obs = self._calc_obs_LPF()
+            case 'HPF':
+                obs = self._calc_obs_HPF()
+        self._obs_history.append(obs)
 
+        # calc reward and termination/truncation conditions
         reward, reward_info = self._calc_reward(action)
         terminated, truncated = self._calc_term_trunc()
         if populate_info:
@@ -158,7 +166,7 @@ class Go1_Env(MujocoEnv):
 
         self._last_action = action
 
-        return obs, reward, terminated, truncated, info
+        return np.concatenate(self._obs_history), reward, terminated, truncated, info
 
     def reset_model(self):
         # No noise on floating base
@@ -176,6 +184,8 @@ class Go1_Env(MujocoEnv):
         self._feet_air_time = np.zeros(4)
         self._last_kick_time = 0.0
 
+        # this part doesnt use noise as we assume the
+        # filter settles at this time
         obs = self._calc_obs()
         self._last_lpf = obs.copy()
         self._obs_history.extend([obs.copy() for _ in range(self._history_len)])
@@ -211,40 +221,46 @@ class Go1_Env(MujocoEnv):
         raw_obs = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
         obs_clipped = np.clip(raw_obs, -self._obs_clip_thresh, self._obs_clip_thresh)
 
-        self._obs_history.append(obs_clipped)
-
-        return np.concatenate(self._obs_history)
+        return obs_clipped
     
-    def _calc_obs_LPF(self, alpha):
+    def _calc_obs_LPF(self):
         q = self.data.qpos[-12:]
-        qd = self.data.qvel[-12:] * self._obs_weights['qd']
-        v = self.data.qvel[:3] * self._obs_weights['v']
-        w = self.data.qvel[3:6] * self._obs_weights['w']
+        qd = self.data.qvel[-12:]
+        v = self.data.qvel[:3]
+        w = self.data.qvel[3:6]
 
         raw_obs = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
-        lowpassed = alpha*raw_obs + (1-alpha)*self._last_lpf[-1]
+        lowpassed = self._alpha*raw_obs + (1-self._alpha)*self._last_lpf[-1]
         self._last_lpf = lowpassed
 
-        clipped = np.clip(lowpassed, -self._obs_clip_thresh, self._obs_clip_thresh)
-        self._obs_history.append(clipped) # oldest to newest left to right
-
-        return np.concatenate(self._obs_history)
+        # scale and clip
+        q = lowpassed[:12]
+        v = lowpassed[12:12+3] * self._obs_weights['v']
+        w = lowpassed[15:15+3] * self._obs_weights['w']
+        qd = lowpassed[18:18+12] * self._obs_weights['qd']
+        obs = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
+        clipped = np.clip(obs, -self._obs_clip_thresh, self._obs_clip_thresh)
+        return clipped
     
-    def _calc_obs_HPF(self, alpha):
+    def _calc_obs_HPF(self):
         q = self.data.qpos[-12:]
-        qd = self.data.qvel[-12:] * self._obs_weights['qd']
-        v = self.data.qvel[:3] * self._obs_weights['v']
-        w = self.data.qvel[3:6] * self._obs_weights['w']
+        qd = self.data.qvel[-12:]
+        v = self.data.qvel[:3]
+        w = self.data.qvel[3:6]
 
         raw_obs = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
-        lowpassed = alpha*raw_obs + (1-alpha)*self._last_lpf[-1]
-        highpassed = raw_obs + lowpassed
+        lowpassed = self._alpha*raw_obs + (1-self._alpha)*self._last_lpf[-1]
+        highpassed = raw_obs - lowpassed
         self._last_lpf = lowpassed
 
-        clipped = np.clip(highpassed, -self._obs_clip_thresh, self._obs_clip_thresh)
-        self._obs_history.append(clipped) # oldest to newest left to right
-
-        return np.concatenate(self._obs_history)
+        # scale and clip
+        q = highpassed[:12]
+        v = highpassed[12:12+3] * self._obs_weights['v']
+        w = highpassed[15:15+3] * self._obs_weights['w']
+        qd = highpassed[18:18+12] * self._obs_weights['qd']
+        obs = np.concatenate((q, v, w, qd, self._g_proj, self._last_action))
+        clipped = np.clip(obs, -self._obs_clip_thresh, self._obs_clip_thresh)
+        return clipped
     
     def _calc_reward(self, action: np.ndarray) -> tuple[float, dict]:
         # https://arxiv.org/abs/2203.05194 ignore the delta t
@@ -359,8 +375,7 @@ class Go1_Env(MujocoEnv):
         feet_velocities = np.array(feet_velocities)
 
         for loc, vel in zip(feet_locations, feet_velocities):
-            # Reward for dragging (low height but moving horizontally)
-            if loc[2] < 0.05 and np.linalg.norm(vel[:2]) > 0.02:
+            if loc[2] < 0.08 and np.linalg.norm(vel[:2]) > 0.05:
                 reward += 1.0
 
         return reward
