@@ -7,3 +7,5 @@ tqdm==4.67.1
 imageio
 tensorboard
 rich
+moviepy
+pyyaml

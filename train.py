@@ -22,6 +22,7 @@ def train(args):
             history_length=args.history_length,
             noise_type=args.noise_type,
             alpha=args.alpha,
+            populate_info=args.populate_info,
             **kwargs
         )
         return env
@@ -82,6 +83,8 @@ if __name__ == "__main__":
     parser.add_argument("--eval_freq", type=int, required=True)
     parser.add_argument("--history_length", type=int, required=True)
 
+
+    parser.add_argument("--populate_info", action="store_true", help="If set, env will populate detailed info (torque, power, etc.)")
     parser.add_argument("--noise_type", type=str, required=False, default='None', help='None, HPF or LPF')
     parser.add_argument("--alpha", type=float, required=False, default=0.5)
     parser.add_argument("--torque_scale", type=float, required=False, default=1.0)

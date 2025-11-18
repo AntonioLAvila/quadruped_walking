@@ -1,0 +1,25 @@
+jobs:
+  - type: train
+    args:
+      num_steps: 500000
+      model_dir: "out/a0.5_h1"
+      eval_freq: 50000
+      history_length: 1
+      alpha: 0.5
+      torque_scale: 1.0
+      num_envs: 12
+      seed: 0
+      populate_info: false
+
+  - type: test
+    args:
+      model_path: "out/a0.5_h1/best_model.zip"
+      history_length: 1
+      num_episodes: 3
+      ep_length: 3000
+      torque_scale: 1.0
+      alpha: 0.5
+      noise_type: "None"
+      render_mode: "human"
+      record: false
+      populate_info: true

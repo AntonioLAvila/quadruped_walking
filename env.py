@@ -31,7 +31,7 @@ class Go1_Env(MujocoEnv):
         ]
     }
 
-    def __init__(self, history_length=1, noise_type='None', alpha=0.5, torque_scale=1, **kwargs):
+    def __init__(self, history_length=1, noise_type='None', alpha=0.5, torque_scale=1, populate_info=False, **kwargs):
 
         super().__init__(
             model_path=os.path.join(os.path.dirname(__file__), "unitree_go1", "scene_torque.xml"),
@@ -75,6 +75,10 @@ class Go1_Env(MujocoEnv):
         self._g_proj = np.zeros(3)
         self._last_action = np.zeros(12)
         self._last_kick_time = 0.0
+        self._last_torque = np.zeros(12)
+        self._last_power = 0.0
+        self._populate_info = populate_info
+        # self._kick_robot = kick_robot
 
         self._weights = {
             'base_v_xy': 4.0,
@@ -116,7 +120,7 @@ class Go1_Env(MujocoEnv):
             dtype=np.float64
         )
 
-    def step(self, action: np.ndarray, populate_info=False, kick_robot=False):
+    def step(self, action: np.ndarray):
         self._step += 1  # update for keeping time
 
         # calc action
@@ -127,13 +131,17 @@ class Go1_Env(MujocoEnv):
         self.do_simulation(clipped_action, self.frame_skip)  
         self._g_proj = self.projected_gravity(self.data.qpos[3:7])
 
-        # maybe kick the robot
-        if kick_robot:
-            current_time = self._step*self.dt
-            if current_time - self._last_kick_time > 3.0 and current_time > 5.0:
-                if self._rng.random() < 0.2:
-                    self.kick_robot()
-                    self._last_kick_time = current_time
+        joint_vel = self.data.qvel[-12:]
+        self._last_torque = clipped_action
+        self._last_power = float(np.abs(self._last_torque * joint_vel).sum())
+
+        # # maybe kick the robot
+        # if self._kick_robot:
+        #     current_time = self._step*self.dt
+        #     if current_time - self._last_kick_time > 3.0 and current_time > 5.0:
+        #         if self._rng.random() < 0.2:
+        #             self.kick_robot()
+        #             self._last_kick_time = current_time
 
         # calc observation
         match self._noise_type:
@@ -148,13 +156,15 @@ class Go1_Env(MujocoEnv):
         # calc reward and termination/truncation conditions
         reward, reward_info = self._calc_reward(action)
         terminated, truncated = self._calc_term_trunc()
-        if populate_info:
+        if self._populate_info:
             info = {
                 'R': self.data.qpos[3:7],
                 'vel': self.data.qvel[:3],
                 'omega': self.data.qvel[3:6],
                 'g_proj': self.projected_gravity(self.data.qpos[3:7]),
                 **reward_info,
+                'torque': self._last_torque,
+                'power': self._last_power,
             }
         else:
             info = {}
@@ -183,6 +193,8 @@ class Go1_Env(MujocoEnv):
         self._last_contacts = np.zeros(4)
         self._feet_air_time = np.zeros(4)
         self._last_kick_time = 0.0
+        self._last_torque = np.zeros(12)
+        self._last_power = 0.0
 
         # this part doesnt use noise as we assume the
         # filter settles at this time
