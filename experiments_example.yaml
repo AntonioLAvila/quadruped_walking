@@ -9,6 +9,7 @@ jobs:
       torque_scale: 1.0
       num_envs: 12
       seed: 0
+      obs_delay: 0
       populate_info: false
 
   - type: test
@@ -22,4 +23,5 @@ jobs:
       noise_type: "None"
       render_mode: "human"
       record: false
+      obs_delay: 0
       populate_info: true

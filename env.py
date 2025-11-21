@@ -31,7 +31,7 @@ class Go1_Env(MujocoEnv):
         ]
     }
 
-    def __init__(self, history_length=1, noise_type='None', alpha=0.5, torque_scale=1, populate_info=False, **kwargs):
+    def __init__(self, history_length=1, noise_type='None', alpha=0.5, torque_scale=1, populate_info=False, obs_delay=0, **kwargs):
 
         super().__init__(
             model_path=os.path.join(os.path.dirname(__file__), "unitree_go1", "scene_torque.xml"),
@@ -49,7 +49,7 @@ class Go1_Env(MujocoEnv):
         self._history_len = history_length
         self._noise_type = noise_type if noise_type is not None else 'None'
         self._alpha = alpha
-
+        self._obs_delay = obs_delay
 
         self._rng = np.random.default_rng()
         self._max_episode_time = 15.0  # seconds
@@ -112,6 +112,10 @@ class Go1_Env(MujocoEnv):
             maxlen=self._history_len
         )
         self._last_lpf = np.zeros(self._single_obs_shape) # used for LPF/HPF
+        self._obs_delay_buffer = deque(
+            [np.zeros(self._single_obs_shape) for _ in range(self._obs_delay + 1)],
+            maxlen=self._obs_delay + 1,
+        )
         obs_shape = (self._single_obs_shape[0] * history_length,)
         self.observation_space = Box(
             low=-np.inf,
@@ -151,6 +155,13 @@ class Go1_Env(MujocoEnv):
                 obs = self._calc_obs_LPF()
             case 'HPF':
                 obs = self._calc_obs_HPF()
+
+        if self._obs_delay > 0:
+            self._obs_delay_buffer.append(obs)
+            delayed_obs = self._obs_delay_buffer[0]
+        else:
+            delayed_obs = obs                
+            
         self._obs_history.append(obs)
 
         # calc reward and termination/truncation conditions
@@ -201,6 +212,11 @@ class Go1_Env(MujocoEnv):
         obs = self._calc_obs()
         self._last_lpf = obs.copy()
         self._obs_history.extend([obs.copy() for _ in range(self._history_len)])
+
+        self._obs_delay_buffer = deque(
+            [obs.copy() for _ in range(self._obs_delay + 1)],
+            maxlen=self._obs_delay + 1,
+        )
 
         return np.concatenate(self._obs_history)
 

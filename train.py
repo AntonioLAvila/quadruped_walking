@@ -23,6 +23,7 @@ def train(args):
             noise_type=args.noise_type,
             alpha=args.alpha,
             populate_info=args.populate_info,
+            obs_delay=args.obs_delay,
             **kwargs
         )
         return env
@@ -91,6 +92,8 @@ if __name__ == "__main__":
     parser.add_argument("--num_envs", type=int, required=False, default=12)
     parser.add_argument("--log_dir", type=str, required=False, default=None)
     parser.add_argument("--seed", type=int, required=False, default=0)
+    parser.add_argument("--obs_delay", type=int, required=False, default=0, help="Num env steps to delay observations by")
+
     args = parser.parse_args()
 
     train(args)
