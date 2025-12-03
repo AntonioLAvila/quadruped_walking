@@ -14,7 +14,8 @@ def test(args):
             history_length=args.history_length,
             noise_type=args.noise_type,
             alpha=args.alpha,
-            render_mode=args.render_mode
+            render_mode=args.render_mode,
+            obs_delay=args.obs_delay
         )
     else:
         env = Go1_Env(
@@ -26,6 +27,7 @@ def test(args):
             camera_name='tracking',
             width=1920,
             height=1080,
+            obs_delay=args.obs_delay
         )
         env = RecordVideo(env, video_folder=args.output)
 
@@ -112,6 +114,7 @@ if __name__ == "__main__":
     parser.add_argument('--num_episodes', type=int, required=False, default=1)
     parser.add_argument('--output', type=str, required=False, default='videos')
     parser.add_argument('--render_mode', type=str, required=False, default='human')
+    parser.add_argument("--obs_delay", type=int, required=False, default=0, help="Num env steps to delay observations by")
     args = parser.parse_args()
 
     test(args)
