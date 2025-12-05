@@ -5,6 +5,9 @@ from stable_baselines3 import PPO
 from tqdm import tqdm
 import time
 import numpy as np
+import json
+from pathlib import Path
+from util import get_run_id, DB_NAME
 
 
 def test(args):
@@ -86,6 +89,20 @@ def test(args):
         avg_torque_norm = 0.0
         avg_power = 0.0
 
+    if args.dir_stats_out != "":
+        path_json_db = Path(args.dir_stats_out) / DB_NAME
+        metrics = {
+            "total_reward" : total_reward,
+            "total_length" : total_length,
+            "falls" : n_falls, 
+            "avg_velocity" : avg_vel,
+            "avg_angular_velocity" : avg_omega,
+            "avg_gravity_projection" : avg_g_proj,
+            "avg_torque_norm" : avg_torque_norm,
+            "avg_power" : avg_power,
+        }
+        save_to_master_db(get_run_id(args), args, metrics, path_json_db)
+
     print("\n--- Run Summary ---")
     print(f"Avg episode reward: {total_reward / args.num_episodes:.3f}")
     print(f"Avg episode length: {total_length / args.num_episodes:.2f}")
@@ -98,6 +115,27 @@ def test(args):
 
     env.close()
 
+def save_to_master_db(run_id, args, metrics, path_db="master_run_db.json"):
+    data = {}
+    path_db = Path(path_db)
+    if path_db.exists():
+        try:
+            with open(path_db, 'r') as f:
+                data = json.load(f)
+        except json.JSONDecodeError:
+            print(f"Warning: {path_db} was corrupted. Creating a new one.")
+    
+    data[run_id] = {
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "config": vars(args),
+        "metrics": metrics
+    }
+    
+    with open(path_db, 'w') as f:
+        json.dump(data, f, indent=4)
+    
+    print(f"\nDatabase Saved run to {path_db}")
+    print(f"Database Key: {run_id}")
 
 if __name__ == "__main__":
     parser = ArgumentParser()
@@ -115,6 +153,7 @@ if __name__ == "__main__":
     parser.add_argument('--output', type=str, required=False, default='videos')
     parser.add_argument('--render_mode', type=str, required=False, default='human')
     parser.add_argument("--obs_delay", type=int, required=False, default=0, help="Num env steps to delay observations by")
+    parser.add_argument("--dir_stats_out", type=str, required=False, default="", help="Enter directory where the json database lives")
     args = parser.parse_args()
 
     test(args)

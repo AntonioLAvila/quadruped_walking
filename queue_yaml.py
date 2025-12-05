@@ -3,6 +3,8 @@ import yaml
 import sys
 import os
 
+import argparse
+
 SCRIPT_MAP = {
     "train": "train.py",
     "test": "test.py",
@@ -36,8 +38,7 @@ def build_cmd(job):
     return cmd
 
 
-def main():
-    config_path = "experiments.yaml"
+def main(config_path):
     if not os.path.exists(config_path):
         print(f"ERROR: Could not find {config_path}")
         sys.exit(1)
@@ -46,6 +47,7 @@ def main():
         config = yaml.safe_load(f)
 
     jobs = config.get("jobs", [])
+    print(jobs)
     if not jobs:
         print("No jobs found in YAML file.")
         return
@@ -67,4 +69,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--path_yaml", type=str, required=True, help="path to yaml config job file")
+    args = parser.parse_args()
+    main(args.path_yaml)

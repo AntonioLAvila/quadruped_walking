@@ -1,0 +1,29 @@
+graph_jobs:
+  - type: scatter_plot
+    y_axes: 
+      - all # could also do - total_reward,  - falls, etc]
+    x_axes: 
+      - Average Episode Reward 
+      - Average Episode Length
+      - avg_velocity
+      - avg_angular_velocity
+      - avg_power
+    label_args: # these are the args that will label each point
+      - history_length
+      - obs_delay
+    
+  - type: swarm_plot
+    y_axes: 
+      - all # could also do - total_reward,  - falls, etc]
+    x_axes: 
+      - Average Episode Reward 
+      - Average Episode Length
+      - avg_velocity
+      - avg_angular_velocity
+      - avg_power
+    label_args: # these are the args that will label each point
+      - history_length
+      - obs_delay
+    
+
+

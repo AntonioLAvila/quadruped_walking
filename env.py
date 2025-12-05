@@ -162,7 +162,7 @@ class Go1_Env(MujocoEnv):
         else:
             delayed_obs = obs                
             
-        self._obs_history.append(obs)
+        self._obs_history.append(delayed_obs)
 
         # calc reward and termination/truncation conditions
         reward, reward_info = self._calc_reward(action)
