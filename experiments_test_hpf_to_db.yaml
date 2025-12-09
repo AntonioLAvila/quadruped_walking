@@ -1,0 +1,138 @@
+jobs:
+# history 1
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf/hpf-1-25.zip
+      history_length: 1
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/hpf/hpf-1-25
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf
+      alpha: 0.25
+      noise_type: "HPF"
+      torque_scale: 1.0
+      populate_info: false      
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf/hpf-1-50.zip
+      history_length: 1
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/hpf/hpf-1-50
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf
+      alpha: 0.50
+      noise_type: "HPF"
+      torque_scale: 1.0
+      populate_info: false
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf/hpf-1-75.zip
+      history_length: 1
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/hpf/hpf-1-75
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf
+      alpha: 0.75
+      noise_type: "HPF"
+      torque_scale: 1.0
+      populate_info: false    
+# history 3      
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf/hpf-3-25.zip
+      history_length: 3
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/hpf/hpf-3-25
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf
+      alpha: 0.25
+      noise_type: "HPF"
+      torque_scale: 1.0
+      populate_info: false
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf/hpf-3-50.zip
+      history_length: 3
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/hpf/hpf-3-50
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf
+      alpha: 0.50
+      noise_type: "HPF"
+      torque_scale: 1.0
+      populate_info: false
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf/hpf-3-75.zip
+      history_length: 3
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/hpf/hpf-3-75
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf
+      alpha: 0.75
+      noise_type: "HPF"
+      torque_scale: 1.0
+      populate_info: false
+# history 6
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf/hpf-6-25.zip
+      history_length: 6
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/hpf/hpf-6-25
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf
+      alpha: 0.25
+      noise_type: "HPF"
+      torque_scale: 1.0
+      populate_info: false
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf/hpf-6-50.zip
+      history_length: 6
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/hpf/hpf-6-50
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf
+      alpha: 0.50
+      noise_type: "HPF"
+      torque_scale: 1.0
+      populate_info: false
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf/hpf-6-75.zip
+      history_length: 6
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/hpf/hpf-6-75
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf
+      alpha: 0.75
+      noise_type: "HPF"
+      torque_scale: 1.0
+      populate_info: false
+# history 18
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf/hpf-18-25.zip
+      history_length: 18
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/hpf/hpf-18-25
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf
+      alpha: 0.25
+      noise_type: "HPF"
+      torque_scale: 1.0
+      populate_info: false
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf/hpf-18-50.zip
+      history_length: 18
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/hpf/hpf-18-50
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf
+      alpha: 0.50
+      noise_type: "HPF"
+      torque_scale: 1.0
+      populate_info: false
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf/hpf-18-75.zip
+      history_length: 18
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/hpf/hpf-18-75
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/hpf
+      alpha: 0.75
+      noise_type: "HPF"
+      torque_scale: 1.0
+      populate_info: false
+ 

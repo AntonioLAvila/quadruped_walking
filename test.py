@@ -18,7 +18,8 @@ def test(args):
             noise_type=args.noise_type,
             alpha=args.alpha,
             render_mode=args.render_mode,
-            obs_delay=args.obs_delay
+            obs_delay=args.obs_delay,
+            populate_info=(not args.no_populate_info)
         )
     else:
         env = Go1_Env(
@@ -30,10 +31,11 @@ def test(args):
             camera_name='tracking',
             width=1920,
             height=1080,
-            obs_delay=args.obs_delay
+            obs_delay=args.obs_delay,
+            populate_info=(not args.no_populate_info)
         )
         env = RecordVideo(env, video_folder=args.output)
-
+    print("path_model: ", args.model_path)
     model = PPO.load(path=args.model_path, env=env, verbose=1, device='cpu')
 
     total_reward = 0
@@ -47,6 +49,8 @@ def test(args):
     torque_norm_sum = 0.0
     power_sum = 0.0
 
+    print(args.num_episodes)
+    print(args.ep_length)
     for _ in tqdm(range(args.num_episodes)):
         obs, _ = env.reset()
         ep_reward = 0
@@ -57,7 +61,7 @@ def test(args):
             ep_len += 1
 
             action, _ = model.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = env.step(action, populate_info=True)
+            obs, reward, terminated, truncated, info = env.step(action)
 
             ep_reward += reward
             total_reward += reward
@@ -92,14 +96,14 @@ def test(args):
     if args.dir_stats_out != "":
         path_json_db = Path(args.dir_stats_out) / DB_NAME
         metrics = {
-            "total_reward" : total_reward,
-            "total_length" : total_length,
-            "falls" : n_falls, 
-            "avg_velocity" : avg_vel,
-            "avg_angular_velocity" : avg_omega,
-            "avg_gravity_projection" : avg_g_proj,
-            "avg_torque_norm" : avg_torque_norm,
-            "avg_power" : avg_power,
+            "total_reward" : float(total_reward),
+            "total_length" : float(total_length),
+            "falls" : float(n_falls), 
+            "avg_velocity" : avg_vel.tolist(),
+            "avg_angular_velocity" : avg_omega.tolist(),
+            "avg_gravity_projection" : avg_g_proj.tolist(),
+            "avg_torque_norm" : float(avg_torque_norm),
+            "avg_power" : float(avg_power),
         }
         save_to_master_db(get_run_id(args), args, metrics, path_json_db)
 
@@ -118,6 +122,8 @@ def test(args):
 def save_to_master_db(run_id, args, metrics, path_db="master_run_db.json"):
     data = {}
     path_db = Path(path_db)
+    path_db.parent.mkdir(parents=True, exist_ok=True)
+    path_db.touch()
     if path_db.exists():
         try:
             with open(path_db, 'r') as f:
@@ -142,9 +148,9 @@ if __name__ == "__main__":
     parser.add_argument('--model_path', type=str, required=True)
     parser.add_argument('--history_length', type=int, required=True)
 
-    parser.add_argument("--no_populate_info", action="store_false", help="Disable info population (enabled by default)")
+    parser.add_argument("--no_populate_info", action="store_true", help="Disable info population (enabled by default)")
     parser.add_argument("--kick_robot", action="store_true", help="If set, env will occasionally kick the robot")
-    parser.add_argument("--ep_length", type=int, required=False, default=3000)
+    parser.add_argument("--ep_length", type=int, required=False, default=1500)
     parser.add_argument("--noise_type", type=str, required=False, default='None', help='None, HPF or LPF')
     parser.add_argument("--alpha", type=float, required=False, default=0.5)
     parser.add_argument('--torque_scale', type=float, required=False, default=1.0)

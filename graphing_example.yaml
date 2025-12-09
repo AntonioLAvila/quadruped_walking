@@ -5,8 +5,8 @@ graph_jobs:
     x_axes: 
       - Average Episode Reward 
       - Average Episode Length
-      - avg_velocity
-      - avg_angular_velocity
+      - avg_velocity_magnitude
+      - avg_angular_velocity_magnitude
       - avg_power
     label_args: # these are the args that will label each point
       - history_length
@@ -18,12 +18,49 @@ graph_jobs:
     x_axes: 
       - Average Episode Reward 
       - Average Episode Length
-      - avg_velocity
-      - avg_angular_velocity
+      - avg_velocity_magnitude
+      - avg_angular_velocity_magnitude
       - avg_power
     label_args: # these are the args that will label each point
       - history_length
       - obs_delay
-    
+
+  - type: table_plot
+    y_axes:
+      - model_name
+    x_axes:
+      - falls
+      - avg_velocity_magnitude
+      - avg_angular_velocity_magnitude
+      - avg_gravity_projection_z
+      - avg_torque_norm
+      - avg_power
+    bold_rules:
+      falls: min
+      avg_velocity_magnitude: max
+      avg_angular_velocity_magnitude: max
+      avg_gravity_projection_z: min
+      avg_torque_norm: min
+      avg_power: min
+    color_rules:
+      falls:
+        mode: max              # highlight the min value
+        scheme: max_red_min_green
+      avg_velocity_magnitude:
+        mode: both              # highlight the max value
+        scheme: max_green_min_red
+      avg_angular_velocity_magnitude:
+        mode: both
+        scheme: max_green_min_red  
+      avg_gravity_projection_z:
+        mode: both
+        scheme: max_green_min_red  
+      avg_torque_norm:
+        mode: both
+        scheme: max_green_min_red
+      avg_power:
+        mode: both
+        scheme: max_green_min_red
+
 
 

@@ -1,0 +1,136 @@
+jobs:
+# alpha 0.25
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf/lpf_a0.25_h1/best_model.zip
+      history_length: 1
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/lpf/lpf_a0.25_h1
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf
+      alpha: 0.25
+      noise_type: LPF
+      torque_scale: 1.0
+      populate_info: false
+  - type: test      
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf/lpf_a0.25_h3/best_model.zip
+      history_length: 3
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/lpf/lpf_a0.25_h3
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf
+      alpha: 0.25
+      noise_type: LPF
+      torque_scale: 1.0
+      populate_info: false
+  - type: test      
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf/lpf_a0.25_h6/best_model.zip
+      history_length: 6
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/lpf/lpf_a0.25_h6
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf
+      alpha: 0.25
+      noise_type: LPF
+      torque_scale: 1.0
+      populate_info: false
+  - type: test      
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf/lpf_a0.25_h18/best_model.zip
+      history_length: 18
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/lpf/lpf_a0.25_h18
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf
+      alpha: 0.25
+      noise_type: LPF
+      torque_scale: 1.0
+      populate_info: false
+# alpha 0.5
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf/lpf_a0.5_h1/best_model.zip
+      history_length: 1
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/lpf/lpf_a0.5_h1
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf
+      alpha: 0.5
+      noise_type: LPF
+      torque_scale: 1.0
+      populate_info: false
+  - type: test      
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf/lpf_a0.5_h3/best_model.zip
+      history_length: 3
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/lpf/lpf_a0.5_h3
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf
+      alpha: 0.5
+      noise_type: LPF
+      torque_scale: 1.0
+      populate_info: false
+  - type: test      
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf/lpf_a0.5_h6/best_model.zip
+      history_length: 6
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/lpf/lpf_a0.5_h6
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf
+      alpha: 0.5
+      noise_type: LPF
+      torque_scale: 1.0
+      populate_info: false
+  - type: test      
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf/lpf_a0.5_h18/best_model.zip
+      history_length: 18
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/lpf/lpf_a0.5_h18
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf
+      alpha: 0.5
+      noise_type: LPF
+      torque_scale: 1.0
+      populate_info: false
+# alpha 0.75
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf/lpf_a0.75_h1/best_model.zip
+      history_length: 1
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/lpf/lpf_a0.75_h1
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf
+      alpha: 0.75
+      noise_type: LPF
+      torque_scale: 1.0
+      populate_info: false
+  - type: test      
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf/lpf_a0.75_h3/best_model.zip
+      history_length: 3
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/lpf/lpf_a0.75_h3
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf
+      alpha: 0.75
+      noise_type: LPF
+      torque_scale: 1.0
+      populate_info: false
+  - type: test      
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf/lpf_a0.75_h6/best_model.zip
+      history_length: 6
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/lpf/lpf_a0.75_h6
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf
+      alpha: 0.75
+      noise_type: LPF
+      torque_scale: 1.0
+      populate_info: false
+  - type: test      
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf/lpf_a0.75_h18/best_model.zip
+      history_length: 18
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/lpf/lpf_a0.75_h18
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/lpf
+      alpha: 0.75
+      noise_type: LPF
+      torque_scale: 1.0
+      populate_info: false

@@ -1,0 +1,42 @@
+jobs:
+# no noise, just history variation
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/no-noise/None-1.zip
+      history_length: 1
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/no_noise/no_noise_1
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/no-noise      
+      noise_type: None
+      torque_scale: 1.0
+      populate_info: false
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/no-noise/None-3.zip
+      history_length: 3
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/no_noise/no_noise_3
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/no-noise      
+      noise_type: None
+      torque_scale: 1.0
+      populate_info: false
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/no-noise/None-6.zip
+      history_length: 6
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/no_noise/no_noise_6
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/no-noise      
+      noise_type: None
+      torque_scale: 1.0
+      populate_info: false
+  - type: test
+    args:
+      model_path: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/no-noise/None-18.zip
+      history_length: 18
+      record: true
+      output: /home/pizzaroll04/Documents/quadruped_walking_out/graphing/videos/no_noise/no_noise_18
+      dir_stats_out: /home/pizzaroll04/Documents/quadruped_walking_out/quadruped_models/no-noise      
+      noise_type: None
+      torque_scale: 1.0
+      populate_info: false
