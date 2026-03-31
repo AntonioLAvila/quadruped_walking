@@ -2,28 +2,52 @@ import jax
 import jax.numpy as jnp
 from mujoco import mjx
 import mujoco
-from brax.envs.base import PipelineEnv, State
 from robot_descriptions import go2_mj_description
-from brax.io import mjcf
+from mujoco_playground._src.mjx_env import MjxEnv, State, make_data, step
+from ml_collections import config_dict
 
-
-class Go2Env(PipelineEnv):
+class Go2Env(MjxEnv):
     def __init__(self):
-        sys = mjcf.load(go2_mj_description.MJCF_PATH)
+        self._xml_path = go2_mj_description.MJCF_PATH
+        self._mj_model = mujoco.MjModel.from_xml_path(go2_mj_description.MJCF_PATH)
+        self._mjx_model = mjx.put_model()
+        cfg = config_dict.ConfigDict()
+        super().__init__(cfg)
 
-        super().__init__(sys, backend='mjx', n_frames=1, debug=False)
+    @property
+    def xml_path(self):
+        return self._xml_path
 
+    @property
+    def action_size(self) -> int:
+        return self._mj_model.nu
+    
+    @property
+    def mj_model(self) -> mujoco.MjModel:
+        return self._mj_model
+
+    @property
+    def mjx_model(self) -> mjx.Model:
+        return self._mjx_model
+    
+    def make_state(self) -> State:
+        state = State()
+        state.obs
+        state.reward
+        state.done
+        state.metrics
+        state.info
+        state.data = make_data(
+            self.mj_model
+        )
+    
     def reset(self, rng: jax.Array) -> State:
-        q = self.sys.key_qpos
-        v = jnp.zeros(self.sys.qd_size())
-        act = jnp.zeros(self.action_size)
-
-        state = self.pipeline_init(q, v, act)
-        return state
-
+        pass
+    
     def step(self, state: State, action: jax.Array) -> State:
-        next_state = self.pipeline_step(state, action)
-        return next_state
+        pass
+    
+    
 
 
 if __name__ == '__main__':
@@ -67,7 +91,3 @@ if __name__ == '__main__':
 
     # =============MINIMAL RENDER===================
     env = Go2Env()
-    s = env.reset(jnp.zeros(2))
-    for i in range(200):
-        s = env.step(s, jnp.zeros(env.sys.act_size()))
-        env.render()
