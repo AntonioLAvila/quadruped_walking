@@ -8,11 +8,13 @@ from ml_collections import config_dict
 
 class Go2Env(MjxEnv):
     def __init__(self):
+        cfg = config_dict.ConfigDict()
+        super().__init__(cfg)
+
         self._xml_path = go2_mj_description.MJCF_PATH
         self._mj_model = mujoco.MjModel.from_xml_path(go2_mj_description.MJCF_PATH)
         self._mjx_model = mjx.put_model()
-        cfg = config_dict.ConfigDict()
-        super().__init__(cfg)
+        self._prng_key = jax.random.PRNGKey(0)
 
     @property
     def xml_path(self):
@@ -30,19 +32,25 @@ class Go2Env(MjxEnv):
     def mjx_model(self) -> mjx.Model:
         return self._mjx_model
     
-    def make_state(self) -> State:
+    def make_state(self, data, obs, reward, done=False, metrics=None, info=None) -> State:
         state = State()
-        state.obs
-        state.reward
-        state.done
-        state.metrics
-        state.info
-        state.data = make_data(
-            self.mj_model
-        )
+        state.data = data
+        state.obs = obs
+        state.reward = reward
+
+        state.done = done
+        state.metrics = metrics
+        state.info = info
+        return state
     
     def reset(self, rng: jax.Array) -> State:
-        pass
+        data = make_data(
+            model=self.mj_model,
+            qpos=self.mjx_model.key_qpos + jax.random.uniform(self._prng_key, self.mjx_model.key_qpos.shape),
+            qvel=jnp.zeros(self.mjx_model.nv),
+            ctrl=jnp.zeros(self.mjx_model.nu),
+        
+        )
     
     def step(self, state: State, action: jax.Array) -> State:
         pass
