@@ -17,21 +17,57 @@ class Go2Env(MjxEnv):
             episode_length=1000,
             action_scale=10,
             history_len=1,
-            impl='mjx',
+            impl='warp', # use mjx for non-nvidia cards
             naconmax=4*8192,
             njmax=40,
             kick_config=config_dict.create(
                 kick_wait_time=[0.05, 0.2], # s
                 kick_vel=[0, 3],
                 kick_duration=[0.05, 0.2] # s
-            )
+            ),
+            command_config=config_dict.create( # v_xy, yaw
+                # Uniform distribution for command amplitude.
+                bounds=[1.5, 0.8, 1.2],
+                # Probability of not zeroing out new command.
+                probs=[0.9, 0.25, 0.5]
+            ),
+            reward_config=config_dict.create(
+                scales=config_dict.create(
+                    # Tracking.
+                    tracking_lin_vel=1.0,
+                    tracking_ang_vel=0.5,
+                    # Base reward.
+                    lin_vel_z=-0.5,
+                    ang_vel_xy=-0.05,
+                    orientation=-5.0,
+                    # Other.
+                    dof_pos_limits=-1.0,
+                    pose=0.5,
+                    # Other.
+                    termination=-1.0,
+                    stand_still=-1.0,
+                    # Regularization.
+                    torques=-0.0002,
+                    action_rate=-0.01,
+                    energy=-0.001,
+                    # Feet.
+                    feet_clearance=-2.0,
+                    feet_height=-0.2,
+                    feet_slip=-0.1,
+                    feet_air_time=0.1,
+                ),
+                tracking_sigma=0.25,
+                max_foot_height=0.1,
+            ),
         )
         super().__init__(cfg)
 
         self._xml_path = go2_mj_description.MJCF_PATH
         self._mj_model = mujoco.MjModel.from_xml_path(go2_mj_description.MJCF_PATH)
         self._mjx_model = mjx.put_model()
-        self._prng_key = jax.random.PRNGKey(0)
+
+        self._ctrl_bounds = jp.array(self._config.command_config.bounds)
+        self._ctrl_probs = jp.array(self._config.command_config.probs)
 
     @property
     def xml_path(self):
@@ -53,16 +89,16 @@ class Go2Env(MjxEnv):
         q0 = jp.array(self.mjx_model.key_qpos)
         v0 = jp.zeros(self.mjx_model.nv)
 
-        # # xy +- 0.5
-        # rng, key = jax.random.split(rng)
-        # dxy = jax.random.uniform(key, (2,), minval=-0.5, maxval=0.5)
-        # q0 = q0.at[0:2].add(dxy)
+        # xy +- 0.5
+        rng, key = jax.random.split(rng)
+        dxy = jax.random.uniform(key, (2,), minval=-0.5, maxval=0.5)
+        q0 = q0.at[0:2].add(dxy)
 
-        # # yaw in U(-pi, pi)
-        # rng, key = jax.random.split(rng)
-        # yaw = jax.random.uniform(key, (1,), minval=-jp.pi, maxval=jp.pi)
-        # quat = math.axis_angle_to_quat(jp.array([0,0,1]), yaw)
-        # q0 = q0.at[3:7].set(math.quat_mul(q0[3:7], quat))
+        # yaw in U(-pi, pi)
+        rng, key = jax.random.split(rng)
+        yaw = jax.random.uniform(key, (1,), minval=-jp.pi, maxval=jp.pi)
+        quat = math.axis_angle_to_quat(jp.array([0,0,1]), yaw)
+        q0 = q0.at[3:7].set(math.quat_mul(q0[3:7], quat))
 
         # small random noise on joints
         rng, key = jax.random.split(rng)
@@ -89,7 +125,7 @@ class Go2Env(MjxEnv):
         data = mjx.forward(self.mjx_model, data)
 
         # kick
-        rng, key1, key2, key3 = jax.random.split(key, 4)
+        rng, key1, key2, key3 = jax.random.split(rng, 4)
         time_until_kick = jax.random.uniform(
             key1,
             minval=self._config.kick_config.kick_wait_time[0],
@@ -107,13 +143,54 @@ class Go2Env(MjxEnv):
             minval=self._config.kick_config.kick_vel[0],
             maxval=self._config.kick_config.kick_vel[1]
         )
+
+        # command
+        rng, key1, key2 = jax.random.split(rng, 3)
+        time_until_command = jax.random.exponential(key1) * 5 # 5 sec avg
+        steps_until_command = jp.round(time_until_command / self.dt).astype(jp.int32)
+        command = jax.random.uniform(
+            key2,
+            (3,),
+            minval=-self._ctrl_bounds,
+            maxval=self._ctrl_bounds
+        )
+
+        info = {
+            "rng": rng,
+            "command": command,
+            "steps_until_next_cmd": steps_until_command,
+            "last_act": jp.zeros(self.mjx_model.nu),
+            "last_last_act": jp.zeros(self.mjx_model.nu),
+            "feet_air_time": jp.zeros(4),
+            "last_contact": jp.zeros(4, dtype=bool),
+            "swing_peak": jp.zeros(4),
+            "steps_until_next_pert": steps_until_kick,
+            "kick_duration": kick_duration,
+            "kick_steps": kick_steps,
+            "steps_since_last_kick": 0,
+            "kick_steps": 0,
+            "kick_dir": jp.zeros(3),
+            "kick_mag": kick_mag
+        }
+
+        metrics = {}
+        for k in self._config.reward_config.scales.keys():
+            metrics[f'reward/{k}'] = jp.zeros(())
+        metrics['swing_peak'] = jp.zeros(())
+
+        obs = self.get_obs(data, info)
+        reward, done = jp.zeros(2)
+        return State(data, obs, reward, done, metrics, info)
         
     
     def step(self, state: State, action: jax.Array) -> State:
         pass
 
     def get_obs(self, data: mjx.Data, info: dict[str, Any]) -> Dict[str, jax.Array]:
-        pass
+        return { # keywords for brax SAC and PPO with critic advantage
+            'state': jax.zeros(100),
+            'privileged_state': jax.zeros(1000)
+        }
     
     
 
