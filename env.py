@@ -17,7 +17,7 @@ class Go2Env(MjxEnv):
             episode_length=1000,
             action_scale=10,
             history_len=1,
-            impl='warp', # use mjx for non-nvidia cards
+            impl='warp', # use mjx jax is basically unusable rip
             naconmax=4*8192,
             njmax=40,
             kick_config=config_dict.create(
@@ -79,7 +79,9 @@ class Go2Env(MjxEnv):
 
         self._xml_path = go2_mj_description.MJCF_PATH
         self._mj_model = mujoco.MjModel.from_xml_path(go2_mj_description.MJCF_PATH)
-        self._mjx_model = mjx.put_model()
+        self._mjx_model = mjx.put_model(self._mj_model, impl=self._config.impl)
+
+        self._q0 = jp.array(self.mjx_model.key_qpos.squeeze())
 
         self._ctrl_bounds = jp.array(self._config.command_config.bounds)
         self._ctrl_probs = jp.array(self._config.command_config.probs)
@@ -101,7 +103,7 @@ class Go2Env(MjxEnv):
         return self._mjx_model
     
     def reset(self, rng: jax.Array) -> State:
-        q0 = jp.array(self.mjx_model.key_qpos)
+        q0 = self._q0.copy()
         v0 = jp.zeros(self.mjx_model.nv)
 
         # xy +- 0.5
@@ -179,10 +181,10 @@ class Go2Env(MjxEnv):
             "feet_air_time": jp.zeros(4),
             "last_contact": jp.zeros(4, dtype=bool),
             "swing_peak": jp.zeros(4),
-            "steps_until_next_pert": steps_until_kick,
+            "steps_until_kick": steps_until_kick,
             "kick_duration": kick_duration,
             "kick_steps": kick_steps,
-            "steps_since_last_kick": 0,
+            "steps_since_kick": 0,
             "kick_steps": 0,
             "kick_dir": jp.zeros(3),
             "kick_mag": kick_mag
@@ -210,68 +212,96 @@ class Go2Env(MjxEnv):
         gravity = math.rotate(self.mj_model.opt.gravity, data.qpos[3:7])
 
         # noise obs
-        info['rng'], key = jax.random.split(info['rng'])
-        noisy_q = q + (2 * jax.random.uniform(key, (12,)) - 1) * self._config.noise_config.level * self._config.noise_config.scales.q
-        noisy_qd = qd + (2 * jax.random.uniform(key, (12,)) - 1) * self._config.noise_config.level * self._config.noise_config.scales.qd
-        noisy_body_v = 
+        info['rng'], key1, key2, key3, key4, key5 = jax.random.split(info['rng'], 6)
+        noisy_q = q + (2 * jax.random.uniform(key1, (12,)) - 1) * self._config.noise_config.level * self._config.noise_config.scales.q
+        noisy_qd = qd + (2 * jax.random.uniform(key2, (12,)) - 1) * self._config.noise_config.level * self._config.noise_config.scales.qd
+        noisy_body_v = body_v + \
+            (2 * jax.random.uniform(key3, (3,)) - 1) * self._config.noise_config.level * self._config.noise_config.scales.body_v
+        noisy_w = w + (2 * jax.random.uniform(key4, (3,)) - 1) * self._config.noise_config.level * self._config.noise_config.scales.w
+        noisy_gravity = gravity + \
+            (2 * jax.random.uniform(key5, (3,)) - 1) * self._config.noise_config.level * self._config.noise_config.scales.gravity
 
+        state = jp.hstack([
+            noisy_q - self._q0.copy()[-12:],
+            noisy_qd,
+            noisy_body_v,
+            noisy_w,
+            noisy_gravity,
+            info['last_act'],
+            info['command']
+        ])
 
+        privileged_state = jp.hstack([
+            state,
+            q - self._q0.copy()[-12:],
+            qd,
+            body_v,
+            w,
+            gravity,
+            data.actuator_force,
+            info['last_contact'],
+            info['feet_air_time'],
+            info['steps_since_kick'] >= info['steps_until_kick']
+        ])
 
         return { # keywords for brax SAC and PPO with critic advantage
-            'state': jax.zeros(100),
-            'privileged_state': jax.zeros(1000)
+            'state': state,
+            'privileged_state': privileged_state
         }
     
 
 
 if __name__ == '__main__':
     # =========INFO=========
-    model = mujoco.MjModel.from_xml_path(go2_mj_description.MJCF_PATH)
-    data = mujoco.MjData(model)
+    # model = mujoco.MjModel.from_xml_path(go2_mj_description.MJCF_PATH)
+    # print(go2_mj_description.MJCF_PATH)
+    # data = mujoco.MjData(model)
 
-    print("Number of joints:", model.njnt)
-    print("Number of actuators:", model.nu)
-    print("Number of bodies:", model.nbody)
-    print("Number of velocities:", model.nv)
-    print("Number of sensors:", model.nsensor)
+    # print("Number of joints:", model.njnt)
+    # print("Number of actuators:", model.nu)
+    # print("Number of bodies:", model.nbody)
+    # print("Number of velocities:", model.nv)
+    # print("Number of sensors:", model.nsensor)
 
 
-    print("Positions (qpos):", data.qpos)  # joint positions
-    print("Velocities (qvel):", data.qvel)  # joint velocities
-    print("Accelerations (qacc):", data.qacc)  # joint accelerations
-    print("Actuator forces (ctrl):", data.ctrl)  # actuator commands
+    # print("Positions (qpos):", data.qpos)  # joint positions
+    # print("Velocities (qvel):", data.qvel)  # joint velocities
+    # print("Accelerations (qacc):", data.qacc)  # joint accelerations
+    # print("Actuator forces (ctrl):", data.ctrl)  # actuator commands
 
-    print('model time step', model.opt.timestep)
+    # print('model time step', model.opt.timestep)
 
-    joint_upper_limits = []
-    joint_lower_limits = []
-    for i in range(model.njnt):
-        name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)
-        joint_type = model.jnt_type[i]  # 0=free, 1=ball, 2=slide, 3=hinge
-        range_ = model.jnt_range[i]
-        joint_lower_limits.append(float(range_[0]))
-        joint_upper_limits.append(float(range_[1]))
-        damping = model.dof_damping[i] if i < len(model.dof_damping) else None
+    # joint_upper_limits = []
+    # joint_lower_limits = []
+    # for i in range(model.njnt):
+    #     name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)
+    #     joint_type = model.jnt_type[i]  # 0=free, 1=ball, 2=slide, 3=hinge
+    #     range_ = model.jnt_range[i]
+    #     joint_lower_limits.append(float(range_[0]))
+    #     joint_upper_limits.append(float(range_[1]))
+    #     damping = model.dof_damping[i] if i < len(model.dof_damping) else None
 
-        print(
-            f"Joint {i}: {name}, type={joint_type}, range={range_}, damping={damping}"
-        )
+    #     print(
+    #         f"Joint {i}: {name}, type={joint_type}, range={range_}, damping={damping}"
+    #     )
     
-    for i in range(model.nsensor):
-        sensor_id = i
-        sensor_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_SENSOR, sensor_id)
-        sensor_type = model.sensor_type[i]
+    # for i in range(model.nsensor):
+    #     sensor_id = i
+    #     sensor_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_SENSOR, sensor_id)
+    #     sensor_type = model.sensor_type[i]
         
-        # mjtSensor is an enum; this tells you if it's a touch sensor, gyro, etc.
-        type_name = mujoco.mjtSensor(sensor_type).name
+    #     # mjtSensor is an enum; this tells you if it's a touch sensor, gyro, etc.
+    #     type_name = mujoco.mjtSensor(sensor_type).name
         
-        print(f"ID: {sensor_id} | Name: {sensor_name} | Type: {type_name}")
+    #     print(f"ID: {sensor_id} | Name: {sensor_name} | Type: {type_name}")
 
-    # print('Joint limits:', joint_lower_limits, "\n", joint_upper_limits)
-    print('Limited joints:', model.jnt_limited)
-    print('Gravity:', model.opt.gravity)
-    print('Actuator ranges:', model.actuator_ctrlrange)
-    print('Key q_pos:', model.key_qpos)
+    # # print('Joint limits:', joint_lower_limits, "\n", joint_upper_limits)
+    # print('Limited joints:', model.jnt_limited)
+    # print('Gravity:', model.opt.gravity)
+    # print('Actuator ranges:', model.actuator_ctrlrange)
+    # print('Key q_pos:', model.key_qpos)
 
     # =============MINIMAL RENDER===================
-    # env = Go2Env()
+    env = Go2Env()
+    rng = jax.random.PRNGKey(42)
+    env.reset(rng)
