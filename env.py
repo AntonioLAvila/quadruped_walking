@@ -106,10 +106,10 @@ class Go2Env(MjxEnv):
         q0 = self._q0.copy()
         v0 = jp.zeros(self.mjx_model.nv)
 
-        # xy +- 0.5
-        rng, key = jax.random.split(rng)
-        dxy = jax.random.uniform(key, (2,), minval=-0.5, maxval=0.5)
-        q0 = q0.at[0:2].add(dxy)
+        # # xy +- 0.5
+        # rng, key = jax.random.split(rng)
+        # dxy = jax.random.uniform(key, (2,), minval=-0.5, maxval=0.5)
+        # q0 = q0.at[0:2].add(dxy)
 
         # yaw in U(-pi, pi)
         rng, key = jax.random.split(rng)
@@ -195,7 +195,7 @@ class Go2Env(MjxEnv):
             metrics[f'reward/{k}'] = jp.zeros(())
         metrics['swing_peak'] = jp.zeros(())
 
-        obs = self.get_obs(data, info)
+        obs = self._get_obs(data, info)
         reward, done = jp.zeros(2)
         return State(data, obs, reward, done, metrics, info)
         
@@ -203,7 +203,7 @@ class Go2Env(MjxEnv):
     def step(self, state: State, action: jax.Array) -> State:
         pass
 
-    def get_obs(self, data: mjx.Data, info: dict[str, Any]) -> Dict[str, jax.Array]:
+    def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> Dict[str, jax.Array]:
         # extract obs
         q = data.qpos[-12:]
         qd = data.qvel[-12:]
@@ -248,6 +248,23 @@ class Go2Env(MjxEnv):
             'state': state,
             'privileged_state': privileged_state
         }
+    
+    def _get_termination(self, data:mjx.Data) -> jax.Array:
+        body_quat = data.qpos[3:7]
+        body_z_axis, _ = math.quat_to_axis_angle(body_quat)
+
+        cos_angle = jp.dot(body_z_axis, [0,0,1])
+        if cos_angle < 0.6:
+            return True  # Bad orientation
+
+        body_z = data.qpos[2]
+        if body_z < 0.1:
+            return True  # Fallen
+
+        if not jp.isfinite(jp.concat([data.qpos, data.qvel])).all():
+            return True  # Something bad happened
+
+        return False
     
 
 
