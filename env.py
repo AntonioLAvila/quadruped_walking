@@ -22,7 +22,7 @@ class Go2Env(MjxEnv):
             njmax=40,
             kick_config=config_dict.create(
                 kick_wait_time=[0.05, 0.2], # s
-                kick_vel=[0, 3],
+                kick_vel=[0.0, 3.0],
                 kick_duration=[0.05, 0.2] # s
             ),
             command_config=config_dict.create( # v_xy, yaw
@@ -58,6 +58,21 @@ class Go2Env(MjxEnv):
                 ),
                 tracking_sigma=0.25,
                 max_foot_height=0.1,
+            ),
+            obs_config=config_dict.create(
+                body_v=2.0,
+                w=0.25,
+                qd=0.05
+            ),
+            noise_config=config_dict.create(
+                level=1.0,  # Set to 0.0 to disable noise.
+                scales=config_dict.create(
+                    q=0.03,
+                    qd=1.5,
+                    w=0.2,
+                    gravity=0.05,
+                    body_v=0.1,
+                ),
             ),
         )
         super().__init__(cfg)
@@ -103,7 +118,7 @@ class Go2Env(MjxEnv):
         # small random noise on joints
         rng, key = jax.random.split(rng)
         noise = jax.random.uniform(key, (self.mjx_model.nu,), minval=-0.05, maxval=0.05)
-        q0 = q0.at[7:].add(noise)
+        q0 = q0.at[-12:].add(noise)
 
         # random spatial body vel
         rng, key = jax.random.split(rng)
@@ -187,11 +202,25 @@ class Go2Env(MjxEnv):
         pass
 
     def get_obs(self, data: mjx.Data, info: dict[str, Any]) -> Dict[str, jax.Array]:
+        # extract obs
+        q = data.qpos[-12:]
+        qd = data.qvel[-12:]
+        body_v = data.qvel[:3]
+        w = data.qvel[3:6]
+        gravity = math.rotate(self.mj_model.opt.gravity, data.qpos[3:7])
+
+        # noise obs
+        info['rng'], key = jax.random.split(info['rng'])
+        noisy_q = q + (2 * jax.random.uniform(key, (12,)) - 1) * self._config.noise_config.level * self._config.noise_config.scales.q
+        noisy_qd = qd + (2 * jax.random.uniform(key, (12,)) - 1) * self._config.noise_config.level * self._config.noise_config.scales.qd
+        noisy_body_v = 
+
+
+
         return { # keywords for brax SAC and PPO with critic advantage
             'state': jax.zeros(100),
             'privileged_state': jax.zeros(1000)
         }
-    
     
 
 
@@ -204,6 +233,8 @@ if __name__ == '__main__':
     print("Number of actuators:", model.nu)
     print("Number of bodies:", model.nbody)
     print("Number of velocities:", model.nv)
+    print("Number of sensors:", model.nsensor)
+
 
     print("Positions (qpos):", data.qpos)  # joint positions
     print("Velocities (qvel):", data.qvel)  # joint velocities
@@ -225,14 +256,22 @@ if __name__ == '__main__':
         print(
             f"Joint {i}: {name}, type={joint_type}, range={range_}, damping={damping}"
         )
+    
+    for i in range(model.nsensor):
+        sensor_id = i
+        sensor_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_SENSOR, sensor_id)
+        sensor_type = model.sensor_type[i]
+        
+        # mjtSensor is an enum; this tells you if it's a touch sensor, gyro, etc.
+        type_name = mujoco.mjtSensor(sensor_type).name
+        
+        print(f"ID: {sensor_id} | Name: {sensor_name} | Type: {type_name}")
 
     # print('Joint limits:', joint_lower_limits, "\n", joint_upper_limits)
     print('Limited joints:', model.jnt_limited)
     print('Gravity:', model.opt.gravity)
     print('Actuator ranges:', model.actuator_ctrlrange)
     print('Key q_pos:', model.key_qpos)
-
-    print(type(model))
 
     # =============MINIMAL RENDER===================
     # env = Go2Env()
