@@ -6,7 +6,7 @@ from mujoco.mjx._src import math
 from robot_descriptions import go2_mj_description
 from mujoco_playground._src.mjx_env import MjxEnv, State, step, make_data
 from ml_collections import config_dict
-from typing import Mapping, Union, Dict, Any
+from typing import Mapping, Union, Any
 Observation = Union[jax.Array, Mapping[str, jax.Array]]
 
 class Go2Env(MjxEnv):
@@ -23,7 +23,8 @@ class Go2Env(MjxEnv):
             kick_config=config_dict.create(
                 kick_wait_time=[0.05, 0.2], # s
                 kick_vel=[0.0, 3.0],
-                kick_duration=[0.05, 0.2] # s
+                kick_duration=[0.05, 0.2], # s
+                enable=False
             ),
             command_config=config_dict.create( # v_xy, yaw
                 # Uniform distribution for command amplitude.
@@ -175,16 +176,16 @@ class Go2Env(MjxEnv):
         info = {
             "rng": rng,
             "command": command,
-            "steps_until_next_cmd": steps_until_command,
+            "steps_until_cmd": steps_until_command,
             "last_act": jp.zeros(self.mjx_model.nu),
             "last_last_act": jp.zeros(self.mjx_model.nu),
             "feet_air_time": jp.zeros(4),
             "last_contact": jp.zeros(4, dtype=bool),
             "swing_peak": jp.zeros(4),
-            "steps_until_kick": steps_until_kick,
             "kick_duration": kick_duration,
             "kick_steps": kick_steps,
             "steps_since_kick": 0,
+            "steps_until_kick": steps_until_kick,
             "kick_steps": 0,
             "kick_dir": jp.zeros(3),
             "kick_mag": kick_mag
@@ -201,9 +202,58 @@ class Go2Env(MjxEnv):
         
     
     def step(self, state: State, action: jax.Array) -> State:
-        pass
+        # maybe kick
+        if self._config.kick_config.enable:
+            state = self._handle_kick(state)
 
-    def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> Dict[str, jax.Array]:
+        # step
+        data = step(self.mjx_model, state.data, action, self.n_substeps)
+
+        # handle feet movement
+        # TODO handle feet params
+        contact = jp.ones(4)
+        first_contact = jp.ones(4)
+
+        # observe
+        obs = self._get_obs(data, state.info)
+        done = self._get_termination(data)
+
+        # rewards
+        rewards = self._get_reward(data, action, state.info, state.metrics, done, first_contact, contact)
+        rewards = {k: v * self._config.reward_config.scales[k] for k, v in rewards}
+        final_reward = jp.max(jp.sum(rewards.values()) * self.dt, 0.0)
+
+        # update info
+        state.info['last_last_act'] = state.info['last_act']
+        state.info['last_act'] = action
+        state.info['steps_until_cmd'] -= 1
+        state.info['feet_air_time'] *= ~contact
+        state.info['last_contact'] = contact
+        state.info['swing_peak'] = ~contact
+        state.info['rng'], key1, key2 = jax.random.split(state.info['rng'])
+        state.info['command'] = jp.where(
+            state.info['steps_until_cmd'] <= 0,
+            self.sample_command(key1, state.info['command']),
+            state.info['command']
+        )
+        state.info['steps_until_cmd'] = jp.where(
+            done | (state.info['steps_until_next_cmd'] <= 0),
+            jp.round(jax.random.exponential(key2) * 5.0 / self.dt).astype(jp.int32),
+            state.info['steps_until_cmd']
+        )
+
+        # update metrics
+        for k, v in rewards.items():
+            state.metrics[f"reward/{k}"] = v
+        state.metrics["swing_peak"] = jp.mean(state.info["swing_peak"])
+
+        done = done.astype(final_reward.dtype)
+        state = state.replace(data=data, obs=obs, reward=final_reward, done=done)
+        return state
+
+
+
+    def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> dict[str, jax.Array]:
         # extract obs
         q = data.qpos[-12:]
         qd = data.qvel[-12:]
@@ -249,7 +299,7 @@ class Go2Env(MjxEnv):
             'privileged_state': privileged_state
         }
     
-    def _get_termination(self, data:mjx.Data) -> jax.Array:
+    def _get_termination(self, data: mjx.Data) -> jax.Array:
         body_quat = data.qpos[3:7]
         body_z_axis, _ = math.quat_to_axis_angle(body_quat)
 
@@ -265,6 +315,47 @@ class Go2Env(MjxEnv):
             return True  # Something bad happened
 
         return False
+    
+    def _get_reward(
+        self,
+        data: mjx.Data,
+        action: jax.Array,
+        info: dict[str, jax.Array],
+        metrics: dict[str, jax.Array],
+        done: jax.Array,
+        first_contact: jax.Array,
+        contact: jax.Array
+    ) -> dict[str, jax.Array]:
+        # TODO return the actual reward
+        return jp.ones(1)
+    
+    def _handle_kick(self, orig_state: State) -> State:
+        def kick(state: State) -> State:
+            # TODO implement
+            return state
+
+        def dont_kick(state: State) -> State:
+            # TODO implement
+            return state
+
+        return jax.lax.cond(
+            orig_state.info['steps_since_kick'] >= orig_state.info['steps_until_kick'],
+            kick,
+            dont_kick,
+            orig_state
+        )
+    
+    def sample_command(self, rng: jax.Array, x_k: jax.Array) -> jax.Array:
+        # command sampling for robustness just copied
+        # it basically jitters the command a little
+        rng, y_rng, w_rng, z_rng = jax.random.split(rng, 4)
+        y_k = jax.random.uniform(
+            y_rng, shape=(3,), minval=-self._cmd_a, maxval=self._cmd_a
+        )
+        z_k = jax.random.bernoulli(z_rng, self._cmd_b, shape=(3,))
+        w_k = jax.random.bernoulli(w_rng, 0.5, shape=(3,))
+        x_kp1 = x_k - w_k * (x_k - y_k * z_k)
+        return x_kp1
     
 
 
