@@ -3,8 +3,7 @@ import jax.numpy as jp
 from mujoco import mjx
 import mujoco
 from mujoco.mjx._src import math
-from robot_descriptions import go2_mj_description
-from mujoco_playground._src.mjx_env import MjxEnv, State, step, make_data
+from mujoco_playground._src.mjx_env import MjxEnv, State, step, make_data, update_assets, get_sensor_data
 from ml_collections import config_dict
 from typing import Mapping, Union, Any
 Observation = Union[jax.Array, Mapping[str, jax.Array]]
@@ -78,8 +77,9 @@ class Go2Env(MjxEnv):
         )
         super().__init__(cfg)
 
-        self._xml_path = go2_mj_description.MJCF_PATH
-        self._mj_model = mujoco.MjModel.from_xml_path(go2_mj_description.MJCF_PATH)
+        self._xml_path = 'unitree_go2/go2_warp.xml'
+        assets = update_assets({}, 'unitree_go2/assets')
+        self._mj_model = mujoco.MjModel.from_xml_path(self._xml_path, assets=assets)
         self._mjx_model = mjx.put_model(self._mj_model, impl=self._config.impl)
 
         self._q0 = jp.array(self.mjx_model.key_qpos.squeeze())
@@ -207,12 +207,17 @@ class Go2Env(MjxEnv):
             state = self._handle_kick(state)
 
         # step
-        data = step(self.mjx_model, state.data, action, self.n_substeps)
+        scaled_action = action*self._config.action_scale
+        data = step(self.mjx_model, state.data, scaled_action, self.n_substeps)
 
         # handle feet movement
-        # TODO handle feet params
-        contact = jp.ones(4)
-        first_contact = jp.ones(4)
+        # TODO handle with sensors
+        contact = self._get_feet_contact(data)
+        filter = contact | state.info['last_contact']
+        first_contact = (state.info["feet_air_time"] > 0.0) * filter
+        state.info["feet_air_time"] += self.dt
+        feet_z = self._get_feet_z(data)
+        state.info["swing_peak"] = jp.maximum(state.info["swing_peak"], feet_z)
 
         # observe
         obs = self._get_obs(data, state.info)
@@ -220,7 +225,8 @@ class Go2Env(MjxEnv):
 
         # rewards
         rewards = self._get_reward(data, action, state.info, state.metrics, done, first_contact, contact)
-        rewards = {k: v * self._config.reward_config.scales[k] for k, v in rewards}
+        # NOTE rewards config needs to line up with the dict returned by _get_reward
+        rewards = {k: v * self._config.reward_config.scales[k] for k, v in rewards} 
         final_reward = jp.max(jp.sum(rewards.values()) * self.dt, 0.0)
 
         # update info
@@ -233,7 +239,7 @@ class Go2Env(MjxEnv):
         state.info['rng'], key1, key2 = jax.random.split(state.info['rng'])
         state.info['command'] = jp.where(
             state.info['steps_until_cmd'] <= 0,
-            self.sample_command(key1, state.info['command']),
+            self._sample_command(key1, state.info['command']),
             state.info['command']
         )
         state.info['steps_until_cmd'] = jp.where(
@@ -252,8 +258,8 @@ class Go2Env(MjxEnv):
         return state
 
 
-
     def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> dict[str, jax.Array]:
+        # TODO use the actual robots sensors
         # extract obs
         q = data.qpos[-12:]
         qd = data.qvel[-12:]
@@ -300,8 +306,9 @@ class Go2Env(MjxEnv):
         }
     
     def _get_termination(self, data: mjx.Data) -> jax.Array:
+        # TODO rewrite with sensors
         body_quat = data.qpos[3:7]
-        body_z_axis, _ = math.quat_to_axis_angle(body_quat)
+        body_z_axis, _ = math.rotate([0,0,1], body_quat)
 
         cos_angle = jp.dot(body_z_axis, [0,0,1])
         if cos_angle < 0.6:
@@ -345,7 +352,7 @@ class Go2Env(MjxEnv):
             orig_state
         )
     
-    def sample_command(self, rng: jax.Array, x_k: jax.Array) -> jax.Array:
+    def _sample_command(self, rng: jax.Array, x_k: jax.Array) -> jax.Array:
         # command sampling for robustness just copied
         # it basically jitters the command a little
         rng, y_rng, w_rng, z_rng = jax.random.split(rng, 4)
@@ -356,7 +363,6 @@ class Go2Env(MjxEnv):
         w_k = jax.random.bernoulli(w_rng, 0.5, shape=(3,))
         x_kp1 = x_k - w_k * (x_k - y_k * z_k)
         return x_kp1
-    
 
 
 if __name__ == '__main__':
@@ -409,7 +415,23 @@ if __name__ == '__main__':
     # print('Actuator ranges:', model.actuator_ctrlrange)
     # print('Key q_pos:', model.key_qpos)
 
+
+    # ===================MJX INFO======================
+    # print(go2_mj_description.MJCF_PATH)
+    # model = mujoco.MjModel.from_xml_path(go2_mj_description.MJCF_PATH)
+    # data = mujoco.MjData(model)
+    # mjx_model = mjx.put_model(model, impl='warp')
+    # mjx_data = mjx.put_data(model, data)
+    
+    # for i in range(mjx_model.ngeom):
+    #     geom_name = mjx_model.geom(i).name
+    #     print(f"Index: {i} | Name: {geom_name}")
+
+    # print(mjx_data.efc_force)
+
     # =============MINIMAL RENDER===================
     env = Go2Env()
     rng = jax.random.PRNGKey(42)
-    env.reset(rng)
+    s = env.reset(rng)
+    # for _ in range(100):
+    #     s = env.step(s, jp.zeros(12))
