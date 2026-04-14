@@ -507,7 +507,7 @@ if __name__ == '__main__':
     
     # 2. Rollout the environment and store states
     trajectory = []
-    for _ in range(500):  # Run for more steps to see meaningful movement
+    for _ in range(100):  # Run for more steps to see meaningful movement
         trajectory.append(state)
         # Use a random action or zeros
         action = jp.zeros(env.action_size) 
