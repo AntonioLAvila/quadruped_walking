@@ -17,22 +17,23 @@ ppo_params = locomotion_params.brax_ppo_config(env_name)
 x_data, y_data, y_dataerr = [], [], []
 times = [datetime.now()]
 
-
+plt.ion() 
+fig, ax = plt.subplots()
 def progress(num_steps, metrics):
-  clear_output(wait=True)
-
   times.append(datetime.now())
   x_data.append(num_steps)
   y_data.append(metrics["eval/episode_reward"])
   y_dataerr.append(metrics["eval/episode_reward_std"])
 
-  plt.xlim([0, ppo_params["num_timesteps"] * 1.25])
-  plt.xlabel("# environment steps")
-  plt.ylabel("reward per episode")
-  plt.title(f"y={y_data[-1]:.3f}")
-  plt.errorbar(x_data, y_data, yerr=y_dataerr, color="blue")
+  ax.clear() # Clear the previous plot
+  ax.set_xlim([0, ppo_params["num_timesteps"] * 1.25])
+  ax.set_xlabel("# environment steps")
+  ax.set_ylabel("reward per episode")
+  ax.set_title(f"Reward: {y_data[-1]:.3f}")
+  ax.errorbar(x_data, y_data, yerr=y_dataerr, color="blue")
 
-  display(plt.gcf())
+  plt.draw()
+  plt.pause(0.1)
 
 randomizer = registry.get_domain_randomizer(env_name)
 ppo_training_params = dict(ppo_params)

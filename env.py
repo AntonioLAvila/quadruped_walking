@@ -6,8 +6,8 @@ import mujoco
 from mujoco.mjx._src import math
 from mujoco_playground._src.mjx_env import MjxEnv, State, step, make_data, update_assets, get_sensor_data
 from ml_collections import config_dict
-from typing import Mapping, Union, Any
-Observation = Union[jax.Array, Mapping[str, jax.Array]]
+from typing import Any
+import mediapy as media
 
 class Go2Env(MjxEnv):
     def __init__(self):
@@ -19,7 +19,8 @@ class Go2Env(MjxEnv):
             history_len=1,
             impl='warp', # use mjx jax is basically unusable rip
             naconmax=4*8192,
-            njmax=40,
+            njmax=156,
+            soft_joint_limit_factor=0.9,
             kick_config=config_dict.create(
                 kick_wait_time=[0.05, 0.2], # s
                 kick_vel=[0.0, 3.0],
@@ -83,6 +84,9 @@ class Go2Env(MjxEnv):
         self._q0 = jp.array(self.mjx_model.key_qpos.squeeze())
         self._ctrl_bounds = jp.array(self._config.command_config.bounds)
         self._ctrl_probs = jp.array(self._config.command_config.probs)
+        lowers, uppers = self.mj_model.jnt_range[1:].T # NOTE first joint is the free body
+        self._soft_lowers = lowers * self._config.soft_joint_limit_factor
+        self._soft_uppers = uppers * self._config.soft_joint_limit_factor
 
         # sites
         FEET = ['FL', 'RL', 'FR', 'RR']
@@ -95,7 +99,9 @@ class Go2Env(MjxEnv):
         self._global_angvel_sensor_name = 'global_angvel'
         self._accel_sensor_name = 'accelerometer'
         self._local_linvel_sensor_name = 'local_linvel'
+        self._global_linvel_sensor_name = 'global_linvel'
         self._gyro_sensor_name = 'gyro'
+        self._body_z_axis_sensor_name = 'body_z_axis'
         self._feet_linvel_sensor_names = np.array([f'{name}_vel' for name in FEET])
 
     @property
@@ -189,7 +195,6 @@ class Go2Env(MjxEnv):
             "command": command,
             "steps_until_cmd": steps_until_command,
             "last_act": jp.zeros(self.mjx_model.nu),
-            "last_last_act": jp.zeros(self.mjx_model.nu),
             "feet_air_time": jp.zeros(4),
             "last_contact": jp.zeros(4, dtype=bool),
             "swing_peak": jp.zeros(4),
@@ -238,13 +243,12 @@ class Go2Env(MjxEnv):
         done = self._get_termination(data)
 
         # rewards
-        rewards = self._get_reward(data, action, state.info, state.metrics, done, first_contact, contact)
+        rewards = self._get_reward(data, action, state.info, done, first_contact, contact)
         # NOTE rewards config needs to line up with the dict returned by _get_reward
         rewards = {k: v * self._config.reward_config.scales[k] for k, v in rewards.items()} 
         final_reward = jp.maximum(sum(rewards.values()) * self.dt, 0.0)
 
         # update info
-        state.info['last_last_act'] = state.info['last_act']
         state.info['last_act'] = action
         state.info['steps_until_cmd'] -= 1
         state.info['feet_air_time'] *= ~contact
@@ -292,7 +296,7 @@ class Go2Env(MjxEnv):
             (2 * jax.random.uniform(key5, gravity.shape) - 1) * self._config.noise_config.level * self._config.noise_config.scales.gravity
 
         state = jp.hstack([
-            noisy_q - self._q0.copy()[-12:],
+            noisy_q - self._q0[-12:],
             noisy_qd,
             noisy_body_v,
             noisy_gyro,
@@ -303,21 +307,18 @@ class Go2Env(MjxEnv):
 
         accelerometer = get_sensor_data(self.mj_model, data, self._accel_sensor_name)
         angvel = get_sensor_data(self.mj_model, data, self._global_angvel_sensor_name)
-        feet_vel = jp.concat([
-            get_sensor_data(self.mj_model, data, name)
-            for name in self._feet_linvel_sensor_names
-        ])
+        feet_vel = self._get_feet_vel(data)
 
         privileged_state = jp.hstack([
             state,
-            q - self._q0.copy()[-12:],
+            q - self._q0[-12:],
             qd,
             body_v,
             gyro,
             gravity,
             accelerometer,
             angvel,
-            feet_vel,
+            feet_vel.flatten(),
             data.actuator_force,
             data.xfrc_applied[self._torso_body_id, :3],
             info['last_contact'],
@@ -332,13 +333,9 @@ class Go2Env(MjxEnv):
     
 
     def _get_termination(self, data: mjx.Data) -> jax.Array:
-        body_quat = data.qpos[3:7]
-        body_z_axis = math.rotate(jp.array([0, 0, 1]), body_quat)
-        cos_angle = jp.dot(body_z_axis, jp.array([0, 0, 1]))
-        
         is_finite = jp.isfinite(jp.concat([data.qpos, data.qvel])).all()
 
-        terminated = (cos_angle < 0.6) | (~is_finite)
+        terminated = (get_sensor_data(self.mj_model, data, self._body_z_axis_sensor_name)[-1] < 0.0) | (~is_finite)
 
         return terminated
     
@@ -347,13 +344,46 @@ class Go2Env(MjxEnv):
         data: mjx.Data,
         action: jax.Array,
         info: dict[str, jax.Array],
-        metrics: dict[str, jax.Array],
         done: jax.Array,
         first_contact: jax.Array,
         contact: jax.Array
     ) -> dict[str, jax.Array]:
-        # TODO return the actual reward
-        return {k: jp.ones(1) for k in self._config.reward_config.scales.keys()}
+        # return {k: jp.ones(1) for k in self._config.reward_config.scales.keys()}
+        return {
+            "tracking_lin_vel": self._linvel_tracking(
+                info["command"],
+                get_sensor_data(self.mj_model, data, self._local_linvel_sensor_name)
+            ),
+            "tracking_ang_vel": self._angvel_tracking(
+                info["command"],
+                get_sensor_data(self.mj_model, data, self._gyro_sensor_name)
+            ),
+            "lin_vel_z": self._cost_linvel_z(get_sensor_data(self.mj_model, data, self._global_linvel_sensor_name)),
+            "ang_vel_xy": self._cost_angvel_xy(get_sensor_data(self.mj_model, data, self._global_angvel_sensor_name)),
+            "orientation": self._cost_orientation(get_sensor_data(self.mj_model, data, self._body_z_axis_sensor_name)),
+            "stand_still": self._inaction_cost(info["command"], data.qpos[-12:]),
+            "termination": self._cost_termination(done),
+            "pose": self._pose_reward(data.qpos[-12:]),
+            "torques": self._torque_cost(action),
+            "action_rate": self._action_rate_cost(
+                action,
+                info["last_act"]
+            ),
+            "energy": self._energy_cost(data.qvel[-12:], data.actuator_force),
+            "feet_slip": self._feet_slip_cost(data, contact, info),
+            "feet_clearance": self._feet_clearance_cost(data),
+            "feet_height": self._feet_height_cost(
+                info["swing_peak"],
+                first_contact,
+                info
+            ),
+            "feet_air_time": self._feet_air_time_reward(
+                info["command"],
+                first_contact,
+                info["feet_air_time"]
+            ),
+            "dof_pos_limits": self._cost_joint_pos_limits(data.qpos[-12:]),
+        }
     
     def _handle_kick(self, orig_state: State) -> State:
         def kick(state: State) -> State:
@@ -382,75 +412,113 @@ class Go2Env(MjxEnv):
         w_k = jax.random.bernoulli(w_rng, 0.5, shape=(3,))
         x_kp1 = x_k - w_k * (x_k - y_k * z_k)
         return x_kp1
+    
+    def _get_feet_vel(self, data: mjx.Data):
+        return jp.stack([
+            get_sensor_data(self.mj_model, data, name)
+            for name in self._feet_linvel_sensor_names
+        ])
+    
+    # ========== REWARDS ==============
+    def _linvel_tracking(self, commands: jax.Array, local_linvel: jax.Array) -> jax.Array:
+        lin_vel_error = jp.sum(jp.square(commands[:2] - local_linvel[:2]))
+        return jp.exp(-lin_vel_error / self._config.reward_config.tracking_sigma)
+    
+    def _angvel_tracking(self, commands: jax.Array, local_angvel: jax.Array) -> jax.Array:
+        ang_vel_error = jp.square(commands[2] - local_angvel[2])
+        return jp.exp(-ang_vel_error / self._config.reward_config.tracking_sigma)
+    
+    def _cost_linvel_z(self, global_linvel: jax.Array) -> jax.Array:
+        return jp.square(global_linvel[2])
+    
+    def _cost_angvel_xy(self, global_angvel) -> jax.Array:
+        return jp.sum(jp.square(global_angvel[:2]))
+    
+    def _cost_orientation(self, body_z_axis: jax.Array) -> jax.Array:
+        return jp.sum(jp.square(body_z_axis[:2]))
+    
+    def _torque_cost(self, act: jax.Array) -> jax.Array:
+        return jp.sqrt(jp.sum(jp.square(act))) + jp.sum(jp.abs(act))
+    
+    def _energy_cost(self, qd: jax.Array, qfrc_actuator) -> jax.Array:
+        return jp.sum(jp.abs(qd) * jp.abs(qfrc_actuator))
+    
+    def _action_rate_cost(self, act: jax.Array, last_act: jax.Array) -> jax.Array:
+        return jp.sum(jp.square(act - last_act))
+    
+    def _pose_reward(self, q: jax.Array) -> jax.Array:
+        return jp.exp(-jp.sum(jp.square(q - self._q0[-12:])))
+    
+    def _inaction_cost(self, commands: jax.Array, q: jax.Array) -> jax.Array:
+        cmd_norm = jp.linalg.norm(commands)
+        return jp.sum(jp.abs(q - self._q0[-12:])) * (cmd_norm < 0.01)
+    
+    def _cost_termination(self, done: jax.Array) -> jax.Array:
+        return done
+    
+    def _cost_joint_pos_limits(self, q: jax.Array) -> jax.Array:
+        out_of_limits = -jp.clip(q - self._soft_lowers, None, 0.0)
+        out_of_limits += jp.clip(q - self._soft_uppers, 0.0, None)
+        return jp.sum(out_of_limits)
+    
+    def _feet_slip_cost(self, data: mjx.Data, contact: jax.Array, info: dict[str, Any]) -> jax.Array:
+        cmd_norm = jp.linalg.norm(info["command"])
+        feet_vel = self._get_feet_vel(data)
+        vel_xy = feet_vel[..., :2]
+        vel_xy_norm_sq = jp.sum(jp.square(vel_xy), axis=-1)
+        return jp.sum(vel_xy_norm_sq * contact) * (cmd_norm > 0.01)
+
+    def _feet_clearance_cost(self, data: mjx.Data) -> jax.Array:
+        feet_vel = self._get_feet_vel(data)
+        vel_xy = feet_vel[..., :2]
+        vel_norm = jp.sqrt(jp.linalg.norm(vel_xy, axis=-1))
+        foot_pos = data.site_xpos[self._feet_site_ids]
+        foot_z = foot_pos[..., -1]
+        delta = jp.abs(foot_z - self._config.reward_config.max_foot_height)
+        return jp.sum(delta * vel_norm)
+    
+    def _feet_height_cost(self, swing_peak: jax.Array, first_contact: jax.Array, info: dict[str, Any]) -> jax.Array:
+        cmd_norm = jp.linalg.norm(info["command"])
+        error = swing_peak / self._config.reward_config.max_foot_height - 1.0
+        return jp.sum(jp.square(error) * first_contact) * (cmd_norm > 0.01)
+
+    def _feet_air_time_reward(self, commands: jax.Array, first_contact: jax.Array, air_time: jax.Array) -> jax.Array:
+        cmd_norm = jp.linalg.norm(commands)
+        rew_air_time = jp.sum((air_time - 0.1) * first_contact)
+        rew_air_time *= cmd_norm > 0.01  # No reward for zero commands.
+        return rew_air_time
+
+
 
 
 if __name__ == '__main__':
-    # =========INFO=========
-    # model = mujoco.MjModel.from_xml_path(go2_mj_description.MJCF_PATH)
-    # print(go2_mj_description.MJCF_PATH)
-    # data = mujoco.MjData(model)
+    # env = Go2Env()
+    # rng = jax.random.PRNGKey(42)
+    # s = env.reset(rng)
+    # for _ in range(10):
+    #     s = env.step(s, jp.zeros(12))
+    # print('done')
 
-    # print("Number of joints:", model.njnt)
-    # print("Number of actuators:", model.nu)
-    # print("Number of bodies:", model.nbody)
-    # print("Number of velocities:", model.nv)
-    # print("Number of sensors:", model.nsensor)
-
-
-    # print("Positions (qpos):", data.qpos)  # joint positions
-    # print("Velocities (qvel):", data.qvel)  # joint velocities
-    # print("Accelerations (qacc):", data.qacc)  # joint accelerations
-    # print("Actuator forces (ctrl):", data.ctrl)  # actuator commands
-
-    # print('model time step', model.opt.timestep)
-
-    # joint_upper_limits = []
-    # joint_lower_limits = []
-    # for i in range(model.njnt):
-    #     name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_JOINT, i)
-    #     joint_type = model.jnt_type[i]  # 0=free, 1=ball, 2=slide, 3=hinge
-    #     range_ = model.jnt_range[i]
-    #     joint_lower_limits.append(float(range_[0]))
-    #     joint_upper_limits.append(float(range_[1]))
-    #     damping = model.dof_damping[i] if i < len(model.dof_damping) else None
-
-    #     print(
-    #         f"Joint {i}: {name}, type={joint_type}, range={range_}, damping={damping}"
-    #     )
-    
-    # for i in range(model.nsensor):
-    #     sensor_id = i
-    #     sensor_name = mujoco.mj_id2name(model, mujoco.mjtObj.mjOBJ_SENSOR, sensor_id)
-    #     sensor_type = model.sensor_type[i]
-        
-    #     # mjtSensor is an enum; this tells you if it's a touch sensor, gyro, etc.
-    #     type_name = mujoco.mjtSensor(sensor_type).name
-        
-    #     print(f"ID: {sensor_id} | Name: {sensor_name} | Type: {type_name}")
-
-    # # print('Joint limits:', joint_lower_limits, "\n", joint_upper_limits)
-    # print('Limited joints:', model.jnt_limited)
-    # print('Gravity:', model.opt.gravity)
-    # print('Actuator ranges:', model.actuator_ctrlrange)
-    # print('Key q_pos:', model.key_qpos)
-
-
-    # ===================MJX INFO======================
-    # print(go2_mj_description.MJCF_PATH)
-    # model = mujoco.MjModel.from_xml_path(go2_mj_description.MJCF_PATH)
-    # data = mujoco.MjData(model)
-    # mjx_model = mjx.put_model(model, impl='warp')
-    # mjx_data = mjx.put_data(model, data)
-    
-    # for i in range(mjx_model.ngeom):
-    #     geom_name = mjx_model.geom(i).name
-    #     print(f"Index: {i} | Name: {geom_name}")
-
-    # print(mjx_data.efc_force)
-
-    # =============MINIMAL RENDER===================
     env = Go2Env()
     rng = jax.random.PRNGKey(42)
-    s = env.reset(rng)
-    for _ in range(100):
-        s = env.step(s, jp.zeros(12))
+    
+    # 1. Reset the environment
+    state = env.reset(rng)
+    
+    # 2. Rollout the environment and store states
+    trajectory = []
+    for _ in range(500):  # Run for more steps to see meaningful movement
+        trajectory.append(state)
+        # Use a random action or zeros
+        action = jp.zeros(env.action_size) 
+        state = env.step(state, action)
+    
+    print('Simulation complete. Rendering...')
+
+    # 3. Render the trajectory
+    # This returns a list of numpy arrays (RGB frames)
+    frames = env.render(trajectory, camera='track') # 'track' is common for quadrupeds
+
+    # 4. Save or Show the video
+    media.write_video('go2_simulation.mp4', frames, fps=1.0/env.dt)
+    print('Video saved to go2_simulation.mp4')

@@ -62,6 +62,7 @@
 
   <worldbody>
     <body name="base" pos="0 0 0.445" childclass="go2">
+      <camera name="track" pos="-1.5 0 0.8" xyaxes="0 -1 0 0.5 0 1" mode="trackcom"/>
       <inertial pos="0.021112 0 -0.005366" quat="-0.000543471 0.713435 -0.00173769 0.700719" mass="6.921"
         diaginertia="0.107027 0.0980771 0.0244531"/>
       <freejoint/>
@@ -236,6 +237,7 @@
     <framepos objtype="site" objname="imu" name="global_position"/>
     <framelinvel objtype="site" objname="imu" name="global_linvel"/>
     <frameangvel objtype="site" objname="imu" name="global_angvel"/>
+    <framezaxis objtype="site" objname="imu" name="body_z_axis"/>
     <contact name="FR_floor_contact" geom1="FR" geom2="floor"/>
     <contact name="RL_floor_contact" geom1="RL" geom2="floor"/>
     <contact name="FL_floor_contact" geom1="RL" geom2="floor"/>
