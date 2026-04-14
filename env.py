@@ -1,5 +1,6 @@
 import jax
 import jax.numpy as jp
+import numpy as np
 from mujoco import mjx
 import mujoco
 from mujoco.mjx._src import math
@@ -59,33 +60,43 @@ class Go2Env(MjxEnv):
                 tracking_sigma=0.25,
                 max_foot_height=0.1,
             ),
-            obs_config=config_dict.create(
-                body_v=2.0,
-                w=0.25,
-                qd=0.05
-            ),
             noise_config=config_dict.create(
                 level=1.0,  # Set to 0.0 to disable noise.
                 scales=config_dict.create(
                     q=0.03,
                     qd=1.5,
-                    w=0.2,
+                    gyro=0.2,
                     gravity=0.05,
-                    body_v=0.1,
+                    body_v=0.1
                 ),
             ),
         )
         super().__init__(cfg)
 
-        self._xml_path = 'unitree_go2/go2_warp.xml'
+        # load model
+        self._xml_path = 'unitree_go2/scene_warp.xml'
         assets = update_assets({}, 'unitree_go2/assets')
         self._mj_model = mujoco.MjModel.from_xml_path(self._xml_path, assets=assets)
         self._mjx_model = mjx.put_model(self._mj_model, impl=self._config.impl)
 
+        # turn things into jax arrays
         self._q0 = jp.array(self.mjx_model.key_qpos.squeeze())
-
         self._ctrl_bounds = jp.array(self._config.command_config.bounds)
         self._ctrl_probs = jp.array(self._config.command_config.probs)
+
+        # sites
+        FEET = ['FL', 'RL', 'FR', 'RR']
+        self._feet_site_ids = np.array([self._mj_model.site(f'{name}_site').id for name in FEET])
+        self._imu_site_id = self._mj_model.site('imu').id
+        self._torso_body_id = self.mj_model.body('base').id
+
+        # sensors
+        self._feet_floor_sensor_ids = np.array([self._mj_model.sensor(f'{name}_floor_contact').id for name in FEET])
+        self._global_angvel_sensor_name = 'global_angvel'
+        self._accel_sensor_name = 'accelerometer'
+        self._local_linvel_sensor_name = 'local_linvel'
+        self._gyro_sensor_name = 'gyro'
+        self._feet_linvel_sensor_names = np.array([f'{name}_vel' for name in FEET])
 
     @property
     def xml_path(self):
@@ -211,13 +222,16 @@ class Go2Env(MjxEnv):
         data = step(self.mjx_model, state.data, scaled_action, self.n_substeps)
 
         # handle feet movement
-        # TODO handle with sensors
-        contact = self._get_feet_contact(data)
+        contact = jp.array([
+            data.sensordata[self.mj_model.sensor_adr[sid]] > 0
+            for sid in self._feet_floor_sensor_ids
+        ])
         filter = contact | state.info['last_contact']
-        first_contact = (state.info["feet_air_time"] > 0.0) * filter
+        first_contact = (state.info["feet_air_time"] > 0) * filter
         state.info["feet_air_time"] += self.dt
-        feet_z = self._get_feet_z(data)
-        state.info["swing_peak"] = jp.maximum(state.info["swing_peak"], feet_z)
+        p_foot = data.site_xpos[self._feet_site_ids]
+        p_foot_z = p_foot[..., -1]
+        state.info["swing_peak"] = jp.maximum(state.info["swing_peak"], p_foot_z)
 
         # observe
         obs = self._get_obs(data, state.info)
@@ -226,8 +240,8 @@ class Go2Env(MjxEnv):
         # rewards
         rewards = self._get_reward(data, action, state.info, state.metrics, done, first_contact, contact)
         # NOTE rewards config needs to line up with the dict returned by _get_reward
-        rewards = {k: v * self._config.reward_config.scales[k] for k, v in rewards} 
-        final_reward = jp.max(jp.sum(rewards.values()) * self.dt, 0.0)
+        rewards = {k: v * self._config.reward_config.scales[k] for k, v in rewards.items()} 
+        final_reward = jp.maximum(sum(rewards.values()) * self.dt, 0.0)
 
         # update info
         state.info['last_last_act'] = state.info['last_act']
@@ -236,14 +250,14 @@ class Go2Env(MjxEnv):
         state.info['feet_air_time'] *= ~contact
         state.info['last_contact'] = contact
         state.info['swing_peak'] = ~contact
-        state.info['rng'], key1, key2 = jax.random.split(state.info['rng'])
+        state.info['rng'], key1, key2 = jax.random.split(state.info['rng'], 3)
         state.info['command'] = jp.where(
             state.info['steps_until_cmd'] <= 0,
             self._sample_command(key1, state.info['command']),
             state.info['command']
         )
         state.info['steps_until_cmd'] = jp.where(
-            done | (state.info['steps_until_next_cmd'] <= 0),
+            done | (state.info['steps_until_cmd'] <= 0),
             jp.round(jax.random.exponential(key2) * 5.0 / self.dt).astype(jp.int32),
             state.info['steps_until_cmd']
         )
@@ -259,32 +273,39 @@ class Go2Env(MjxEnv):
 
 
     def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> dict[str, jax.Array]:
-        # TODO use the actual robots sensors
+        
         # extract obs
         q = data.qpos[-12:]
         qd = data.qvel[-12:]
-        body_v = data.qvel[:3]
-        w = data.qvel[3:6]
-        gravity = math.rotate(self.mj_model.opt.gravity, data.qpos[3:7])
+        body_v = get_sensor_data(self.mj_model, data, self._local_linvel_sensor_name)
+        gyro = get_sensor_data(self.mj_model, data, self._gyro_sensor_name)
+        gravity = data.site_xmat[self._imu_site_id].T @ jp.array([0, 0, -1])
 
         # noise obs
         info['rng'], key1, key2, key3, key4, key5 = jax.random.split(info['rng'], 6)
-        noisy_q = q + (2 * jax.random.uniform(key1, (12,)) - 1) * self._config.noise_config.level * self._config.noise_config.scales.q
-        noisy_qd = qd + (2 * jax.random.uniform(key2, (12,)) - 1) * self._config.noise_config.level * self._config.noise_config.scales.qd
+        noisy_q = q + (2 * jax.random.uniform(key1, q.shape) - 1) * self._config.noise_config.level * self._config.noise_config.scales.q
+        noisy_qd = qd + (2 * jax.random.uniform(key2, qd.shape) - 1) * self._config.noise_config.level * self._config.noise_config.scales.qd
         noisy_body_v = body_v + \
-            (2 * jax.random.uniform(key3, (3,)) - 1) * self._config.noise_config.level * self._config.noise_config.scales.body_v
-        noisy_w = w + (2 * jax.random.uniform(key4, (3,)) - 1) * self._config.noise_config.level * self._config.noise_config.scales.w
+            (2 * jax.random.uniform(key3, body_v.shape) - 1) * self._config.noise_config.level * self._config.noise_config.scales.body_v
+        noisy_gyro = gyro + (2 * jax.random.uniform(key4, gyro.shape) - 1) * self._config.noise_config.level * self._config.noise_config.scales.gyro
         noisy_gravity = gravity + \
-            (2 * jax.random.uniform(key5, (3,)) - 1) * self._config.noise_config.level * self._config.noise_config.scales.gravity
+            (2 * jax.random.uniform(key5, gravity.shape) - 1) * self._config.noise_config.level * self._config.noise_config.scales.gravity
 
         state = jp.hstack([
             noisy_q - self._q0.copy()[-12:],
             noisy_qd,
             noisy_body_v,
-            noisy_w,
+            noisy_gyro,
             noisy_gravity,
             info['last_act'],
             info['command']
+        ])
+
+        accelerometer = get_sensor_data(self.mj_model, data, self._accel_sensor_name)
+        angvel = get_sensor_data(self.mj_model, data, self._global_angvel_sensor_name)
+        feet_vel = jp.concat([
+            get_sensor_data(self.mj_model, data, name)
+            for name in self._feet_linvel_sensor_names
         ])
 
         privileged_state = jp.hstack([
@@ -292,9 +313,13 @@ class Go2Env(MjxEnv):
             q - self._q0.copy()[-12:],
             qd,
             body_v,
-            w,
+            gyro,
             gravity,
+            accelerometer,
+            angvel,
+            feet_vel,
             data.actuator_force,
+            data.xfrc_applied[self._torso_body_id, :3],
             info['last_contact'],
             info['feet_air_time'],
             info['steps_since_kick'] >= info['steps_until_kick']
@@ -305,23 +330,17 @@ class Go2Env(MjxEnv):
             'privileged_state': privileged_state
         }
     
+
     def _get_termination(self, data: mjx.Data) -> jax.Array:
-        # TODO rewrite with sensors
         body_quat = data.qpos[3:7]
-        body_z_axis, _ = math.rotate([0,0,1], body_quat)
+        body_z_axis = math.rotate(jp.array([0, 0, 1]), body_quat)
+        cos_angle = jp.dot(body_z_axis, jp.array([0, 0, 1]))
+        
+        is_finite = jp.isfinite(jp.concat([data.qpos, data.qvel])).all()
 
-        cos_angle = jp.dot(body_z_axis, [0,0,1])
-        if cos_angle < 0.6:
-            return True  # Bad orientation
+        terminated = (cos_angle < 0.6) | (~is_finite)
 
-        body_z = data.qpos[2]
-        if body_z < 0.1:
-            return True  # Fallen
-
-        if not jp.isfinite(jp.concat([data.qpos, data.qvel])).all():
-            return True  # Something bad happened
-
-        return False
+        return terminated
     
     def _get_reward(
         self,
@@ -334,7 +353,7 @@ class Go2Env(MjxEnv):
         contact: jax.Array
     ) -> dict[str, jax.Array]:
         # TODO return the actual reward
-        return jp.ones(1)
+        return {k: jp.ones(1) for k in self._config.reward_config.scales.keys()}
     
     def _handle_kick(self, orig_state: State) -> State:
         def kick(state: State) -> State:
@@ -357,9 +376,9 @@ class Go2Env(MjxEnv):
         # it basically jitters the command a little
         rng, y_rng, w_rng, z_rng = jax.random.split(rng, 4)
         y_k = jax.random.uniform(
-            y_rng, shape=(3,), minval=-self._cmd_a, maxval=self._cmd_a
+            y_rng, shape=(3,), minval=-self._ctrl_bounds, maxval=self._ctrl_bounds
         )
-        z_k = jax.random.bernoulli(z_rng, self._cmd_b, shape=(3,))
+        z_k = jax.random.bernoulli(z_rng, self._ctrl_probs, shape=(3,))
         w_k = jax.random.bernoulli(w_rng, 0.5, shape=(3,))
         x_kp1 = x_k - w_k * (x_k - y_k * z_k)
         return x_kp1
@@ -433,5 +452,5 @@ if __name__ == '__main__':
     env = Go2Env()
     rng = jax.random.PRNGKey(42)
     s = env.reset(rng)
-    # for _ in range(100):
-    #     s = env.step(s, jp.zeros(12))
+    for _ in range(100):
+        s = env.step(s, jp.zeros(12))

@@ -231,14 +231,15 @@
     <jointvel joint="RR_calf_joint" name="knee_hind_right_vel"/>
     <gyro site="imu" name="gyro"/>
     <accelerometer site="imu" name="accelerometer"/>
+    <velocimeter site="imu" name="local_linvel"/>
     <framequat objtype="site" objname="imu" name="orientation"/>
     <framepos objtype="site" objname="imu" name="global_position"/>
     <framelinvel objtype="site" objname="imu" name="global_linvel"/>
     <frameangvel objtype="site" objname="imu" name="global_angvel"/>
-    <touch name="FR_touch" site="FR_site"/>
-    <touch name="RL_touch" site="RL_site"/>
-    <touch name="FL_touch" site="FL_site"/>
-    <touch name="RR_touch" site="RR_site"/>
+    <contact name="FR_floor_contact" geom1="FR" geom2="floor"/>
+    <contact name="RL_floor_contact" geom1="RL" geom2="floor"/>
+    <contact name="FL_floor_contact" geom1="RL" geom2="floor"/>
+    <contact name="RR_floor_contact" geom1="RR" geom2="floor"/>
     <framepos name="FL_pos" objtype="site" objname="FL_site"/>
     <framepos name="FR_pos" objtype="site" objname="FR_site"/>
     <framepos name="RL_pos" objtype="site" objname="RL_site"/>
