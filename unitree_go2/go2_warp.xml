@@ -240,7 +240,7 @@
     <framezaxis objtype="site" objname="imu" name="body_z_axis"/>
     <contact name="FR_floor_contact" geom1="FR" geom2="floor"/>
     <contact name="RL_floor_contact" geom1="RL" geom2="floor"/>
-    <contact name="FL_floor_contact" geom1="RL" geom2="floor"/>
+    <contact name="FL_floor_contact" geom1="FL" geom2="floor"/>
     <contact name="RR_floor_contact" geom1="RR" geom2="floor"/>
     <framepos name="FL_pos" objtype="site" objname="FL_site"/>
     <framepos name="FR_pos" objtype="site" objname="FR_site"/>

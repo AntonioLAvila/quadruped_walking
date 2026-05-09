@@ -15,11 +15,12 @@ class Go2Env(MjxEnv):
             ctrl_dt=0.002,
             sim_dt=0.002,
             episode_length=1000,
-            action_scale=10,
+            action_scale=1.0,
             history_len=1,
             impl='warp', # use mjx jax is basically unusable rip
-            naconmax=4*8192,
-            njmax=156,
+            naconmax=4*(2**15),
+            njmax=2**7,
+            naccdmax=2**12,
             soft_joint_limit_factor=0.9,
             kick_config=config_dict.create(
                 kick_wait_time=[0.05, 0.2], # s
@@ -124,10 +125,12 @@ class Go2Env(MjxEnv):
         q0 = self._q0.copy()
         v0 = jp.zeros(self.mjx_model.nv)
 
+        q0 = q0.at[2].set(0.35) # start above the floor
+
         # # xy +- 0.5
-        # rng, key = jax.random.split(rng)
-        # dxy = jax.random.uniform(key, (2,), minval=-0.5, maxval=0.5)
-        # q0 = q0.at[0:2].add(dxy)
+        rng, key = jax.random.split(rng)
+        dxy = jax.random.uniform(key, (2,), minval=-0.5, maxval=0.5)
+        q0 = q0.at[0:2].add(dxy)
 
         # yaw in U(-pi, pi)
         rng, key = jax.random.split(rng)
@@ -155,7 +158,8 @@ class Go2Env(MjxEnv):
             ctrl=ctrl0,
             impl=self.mjx_model.impl.value,
             naconmax=self._config.naconmax,
-            njmax=self._config.njmax
+            njmax=self._config.njmax,
+            naccdmax=self._config.naccdmax
         )
         data = mjx.forward(self.mjx_model, data)
 
@@ -253,7 +257,7 @@ class Go2Env(MjxEnv):
         state.info['steps_until_cmd'] -= 1
         state.info['feet_air_time'] *= ~contact
         state.info['last_contact'] = contact
-        state.info['swing_peak'] = ~contact
+        state.info['swing_peak'] *= ~contact
         state.info['rng'], key1, key2 = jax.random.split(state.info['rng'], 3)
         state.info['command'] = jp.where(
             state.info['steps_until_cmd'] <= 0,
@@ -502,12 +506,10 @@ if __name__ == '__main__':
     env = Go2Env()
     rng = jax.random.PRNGKey(42)
     
-    # 1. Reset the environment
     state = env.reset(rng)
     
-    # 2. Rollout the environment and store states
     trajectory = []
-    for _ in range(100):  # Run for more steps to see meaningful movement
+    for _ in range(100):
         trajectory.append(state)
         # Use a random action or zeros
         action = jp.zeros(env.action_size) 
@@ -515,10 +517,7 @@ if __name__ == '__main__':
     
     print('Simulation complete. Rendering...')
 
-    # 3. Render the trajectory
-    # This returns a list of numpy arrays (RGB frames)
     frames = env.render(trajectory, camera='track') # 'track' is common for quadrupeds
 
-    # 4. Save or Show the video
     media.write_video('go2_simulation.mp4', frames, fps=1.0/env.dt)
     print('Video saved to go2_simulation.mp4')

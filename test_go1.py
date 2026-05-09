@@ -2,7 +2,6 @@ from mujoco_playground.config import locomotion_params
 from datetime import datetime
 import matplotlib.pyplot as plt
 from mujoco_playground import registry, wrapper
-from IPython.display import clear_output, display
 import functools
 from brax.training.agents.ppo import networks as ppo_networks
 from brax.training.agents.ppo import train as ppo
