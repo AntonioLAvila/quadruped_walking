@@ -15,12 +15,12 @@ class Go2Env(MjxEnv):
             ctrl_dt=0.002,
             sim_dt=0.002,
             episode_length=1000,
-            action_scale=1.0,
+            action_scale=10.0,
             history_len=1,
             impl='warp', # use mjx jax is basically unusable rip
             naconmax=4*(2**15),
             njmax=2**7,
-            naccdmax=2**12,
+            naccdmax=2**13,
             soft_joint_limit_factor=0.9,
             kick_config=config_dict.create(
                 kick_wait_time=[0.05, 0.2], # s
