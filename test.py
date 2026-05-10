@@ -30,7 +30,7 @@ def main():
     action_size = wrapped_env.action_size     # 12
 
     # Build the same PPO network as training.
-    # normalize_observations=True in the Go1 config, so running_statistics.normalize is used.
+    # normalize_observations=True in the train config, so running_statistics.normalize is used
     ppo_network = network_factory(
         observation_size=obs_size,
         action_size=action_size,
@@ -62,14 +62,6 @@ def main():
     renderer = mujoco.Renderer(env.mj_model, height=480, width=640)
     mj_data = mujoco.MjData(env.mj_model)
 
-    # Tracking camera that follows the robot body
-    cam = mujoco.MjvCamera()
-    cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
-    cam.trackbodyid = env.mj_model.body('base').id
-    cam.distance = 3.0
-    cam.azimuth = 90.0
-    cam.elevation = -20.0
-
     frames = []
     fps = 30
     sim_steps_per_frame = max(1, int((1.0 / fps) / env.dt))
@@ -79,7 +71,7 @@ def main():
     for i in range(total_steps):
         rng, act_rng = jax.random.split(rng)
 
-        # Pass the full dict obs — the policy network internally selects obs['state']
+        # Pass the full dict obs the policy network internally selects obs['state']
         # and uses the matching slice of normalizer_params
         act, _ = jit_inference_fn(state.obs, act_rng)
         state = jit_step(state, act)
@@ -95,7 +87,7 @@ def main():
             mj_data.qpos[:] = np.array(state.data.qpos)
             mj_data.qvel[:] = np.array(state.data.qvel)
             mujoco.mj_forward(env.mj_model, mj_data)
-            renderer.update_scene(mj_data, camera=cam)
+            renderer.update_scene(mj_data, camera='track') # Defined in the mjcf
             frames.append(renderer.render())
 
     output_path = "go2_test.mp4"
