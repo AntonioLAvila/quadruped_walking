@@ -12,12 +12,12 @@ import mediapy as media
 class Go2Env(MjxEnv):
     def __init__(self):
         cfg = config_dict.create(
-            ctrl_dt=0.002,
-            sim_dt=0.002,
-            episode_length=1000,
+            ctrl_dt=0.005,
+            sim_dt=0.0025,
+            episode_length=800, # 4s
             action_scale=10.0,
             history_len=1,
-            impl='warp', # use mjx jax is basically unusable rip
+            impl='warp', # using warp. jax is basically unusable rip non-nvidia
             naconmax=4*(2**15),
             njmax=2**7,
             naccdmax=2**13,
@@ -37,27 +37,27 @@ class Go2Env(MjxEnv):
             reward_config=config_dict.create(
                 scales=config_dict.create(
                     # Tracking.
-                    tracking_lin_vel=1.0,
+                    tracking_lin_vel=0.5,
                     tracking_ang_vel=0.5,
                     # Base reward.
-                    lin_vel_z=-0.5,
+                    lin_vel_z=-2.0,
                     ang_vel_xy=-0.05,
-                    orientation=-5.0,
+                    orientation=-15.0,
                     # Other.
                     dof_pos_limits=-1.0,
-                    pose=0.5,
+                    pose=1.0,
                     # Other.
-                    termination=-1.0,
+                    termination=-5.0,
                     stand_still=-1.0,
                     # Regularization.
                     torques=-0.0002,
                     action_rate=-0.01,
                     energy=-0.001,
                     # Feet.
-                    feet_clearance=-2.0,
+                    feet_clearance=-0.5,
                     feet_height=-0.2,
                     feet_slip=-0.1,
-                    feet_air_time=0.1,
+                    feet_air_time=0.3,
                 ),
                 tracking_sigma=0.25,
                 max_foot_height=0.1,
@@ -206,7 +206,6 @@ class Go2Env(MjxEnv):
             "kick_steps": kick_steps,
             "steps_since_kick": 0,
             "steps_until_kick": steps_until_kick,
-            "kick_steps": 0,
             "kick_dir": jp.zeros(3),
             "kick_mag": kick_mag
         }
@@ -337,11 +336,12 @@ class Go2Env(MjxEnv):
     
 
     def _get_termination(self, data: mjx.Data) -> jax.Array:
+        body_z_axis = get_sensor_data(self.mj_model, data, self._body_z_axis_sensor_name)
+
         is_finite = jp.isfinite(jp.concat([data.qpos, data.qvel])).all()
+        too_low = data.qpos[2] < 0.18
 
-        terminated = (get_sensor_data(self.mj_model, data, self._body_z_axis_sensor_name)[-1] < 0.0) | (~is_finite)
-
-        return terminated
+        return too_low | (body_z_axis[-1] < 0.0) | (~is_finite)
     
     def _get_reward(
         self,
