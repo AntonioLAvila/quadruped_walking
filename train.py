@@ -5,6 +5,7 @@ from brax.training.agents.ppo import networks as ppo_networks
 from brax.training.agents.ppo import train as ppo
 from mujoco_playground import wrapper
 from env import Go2Env
+from brax.io import model
 from configs import PPO_CONFIG, NETWORK_FACTORY_CONFIG
 
 def main():
