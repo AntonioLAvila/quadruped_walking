@@ -14,7 +14,7 @@ class Go2Env(MjxEnv):
         cfg = config_dict.create(
             ctrl_dt=0.005,
             sim_dt=0.0025,
-            episode_length=800, # 4s
+            episode_length=4000, # 20s
             action_scale=10.0,
             history_len=1,
             impl='warp', # using warp. jax is basically unusable rip non-nvidia
@@ -37,7 +37,7 @@ class Go2Env(MjxEnv):
             reward_config=config_dict.create(
                 scales=config_dict.create(
                     # Tracking.
-                    tracking_lin_vel=0.5,
+                    tracking_lin_vel=1.0,
                     tracking_ang_vel=0.5,
                     # Base reward.
                     lin_vel_z=-2.0,

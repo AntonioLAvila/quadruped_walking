@@ -25,7 +25,7 @@ def main():
     )
 
     # Wrapped env gives us the same obs/action sizes that training used
-    wrapped_env = wrapper.wrap_for_brax_training(env, episode_length=1000, action_repeat=1)
+    wrapped_env = wrapper.wrap_for_brax_training(env, episode_length=2000, action_repeat=1)
     obs_size = wrapped_env.observation_size   # {'state': (48,), 'privileged_state': (123,)}
     action_size = wrapped_env.action_size     # 12
 
