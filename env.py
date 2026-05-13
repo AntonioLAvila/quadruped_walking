@@ -5,75 +5,13 @@ from mujoco import mjx
 import mujoco
 from mujoco.mjx._src import math
 from mujoco_playground._src.mjx_env import MjxEnv, State, step, make_data, update_assets, get_sensor_data
-from ml_collections import config_dict
 from typing import Any
 import mediapy as media
+from configs import default_go2_config
 
 class Go2Env(MjxEnv):
     def __init__(self):
-        cfg = config_dict.create(
-            ctrl_dt=0.005,
-            sim_dt=0.0025,
-            episode_length=4000, # 20s
-            action_scale=10.0,
-            history_len=1,
-            impl='warp', # using warp. jax is basically unusable rip non-nvidia
-            naconmax=4*(2**15),
-            njmax=2**7,
-            naccdmax=2**13,
-            soft_joint_limit_factor=0.9,
-            kick_config=config_dict.create(
-                kick_wait_time=[0.05, 0.2], # s
-                kick_vel=[0.0, 3.0],
-                kick_duration=[0.05, 0.2], # s
-                enable=False
-            ),
-            command_config=config_dict.create( # v_xy, yaw
-                # Uniform distribution for command amplitude.
-                bounds=[1.5, 0.8, 1.2],
-                # Probability of not zeroing out new command.
-                probs=[0.9, 0.25, 0.5]
-            ),
-            reward_config=config_dict.create(
-                scales=config_dict.create(
-                    # Tracking.
-                    tracking_lin_vel=1.0,
-                    tracking_ang_vel=0.5,
-                    # Base reward.
-                    lin_vel_z=-2.0,
-                    ang_vel_xy=-0.05,
-                    orientation=-15.0,
-                    # Other.
-                    dof_pos_limits=-1.0,
-                    pose=1.0,
-                    # Other.
-                    termination=-5.0,
-                    stand_still=-1.0,
-                    # Regularization.
-                    torques=-0.0002,
-                    action_rate=-0.01,
-                    energy=-0.001,
-                    # Feet.
-                    feet_clearance=-0.5,
-                    feet_height=-0.2,
-                    feet_slip=-0.1,
-                    feet_air_time=0.3,
-                ),
-                tracking_sigma=0.25,
-                max_foot_height=0.1,
-            ),
-            noise_config=config_dict.create(
-                level=1.0,  # Set to 0.0 to disable noise.
-                scales=config_dict.create(
-                    q=0.03,
-                    qd=1.5,
-                    gyro=0.2,
-                    gravity=0.05,
-                    body_v=0.1
-                ),
-            ),
-        )
-        super().__init__(cfg)
+        super().__init__(default_go2_config())
 
         # load model
         self._xml_path = 'unitree_go2/scene_warp.xml'
@@ -125,7 +63,7 @@ class Go2Env(MjxEnv):
         q0 = self._q0.copy()
         v0 = jp.zeros(self.mjx_model.nv)
 
-        q0 = q0.at[2].set(0.35) # start above the floor
+        q0 = q0.at[2].set(self._config.nominal_height)
 
         # # xy +- 0.5
         rng, key = jax.random.split(rng)
@@ -249,7 +187,7 @@ class Go2Env(MjxEnv):
         rewards = self._get_reward(data, action, state.info, done, first_contact, contact)
         # NOTE rewards config needs to line up with the dict returned by _get_reward
         rewards = {k: v * self._config.reward_config.scales[k] for k, v in rewards.items()} 
-        final_reward = jp.maximum(sum(rewards.values()) * self.dt, 0.0)
+        final_reward = sum(rewards.values()) * self.dt
 
         # update info
         state.info['last_act'] = action
@@ -339,7 +277,7 @@ class Go2Env(MjxEnv):
         body_z_axis = get_sensor_data(self.mj_model, data, self._body_z_axis_sensor_name)
 
         is_finite = jp.isfinite(jp.concat([data.qpos, data.qvel])).all()
-        too_low = data.qpos[2] < 0.18
+        too_low = data.qpos[2] < self._config.min_height
 
         return too_low | (body_z_axis[-1] < 0.0) | (~is_finite)
     
@@ -352,19 +290,22 @@ class Go2Env(MjxEnv):
         first_contact: jax.Array,
         contact: jax.Array
     ) -> dict[str, jax.Array]:
-        # return {k: jp.ones(1) for k in self._config.reward_config.scales.keys()}
+        body_z = get_sensor_data(self.mj_model, data, self._body_z_axis_sensor_name)
+        # upright^2 so tracking reward drops off quickly with tilt — crossover to negative around 37°.
+        upright = jp.clip(body_z[2], 0.0, 1.0) ** 2
         return {
+            "healthy": self._healthy(data.qpos),
             "tracking_lin_vel": self._linvel_tracking(
                 info["command"],
                 get_sensor_data(self.mj_model, data, self._local_linvel_sensor_name)
-            ),
+            ) * upright,
             "tracking_ang_vel": self._angvel_tracking(
                 info["command"],
                 get_sensor_data(self.mj_model, data, self._gyro_sensor_name)
-            ),
+            ) * upright,
             "lin_vel_z": self._cost_linvel_z(get_sensor_data(self.mj_model, data, self._global_linvel_sensor_name)),
             "ang_vel_xy": self._cost_angvel_xy(get_sensor_data(self.mj_model, data, self._global_angvel_sensor_name)),
-            "orientation": self._cost_orientation(get_sensor_data(self.mj_model, data, self._body_z_axis_sensor_name)),
+            "orientation": self._cost_orientation(body_z),
             "stand_still": self._inaction_cost(info["command"], data.qpos[-12:]),
             "termination": self._cost_termination(done),
             "pose": self._pose_reward(data.qpos[-12:]),
@@ -424,6 +365,9 @@ class Go2Env(MjxEnv):
         ])
     
     # ========== REWARDS ==============
+    def _healthy(self, q: jax.Array) -> jax.Array:
+        return jp.clip(q[2] / self._config.nominal_height, 0.0, 1.0)
+
     def _linvel_tracking(self, commands: jax.Array, local_linvel: jax.Array) -> jax.Array:
         lin_vel_error = jp.sum(jp.square(commands[:2] - local_linvel[:2]))
         return jp.exp(-lin_vel_error / self._config.reward_config.tracking_sigma)

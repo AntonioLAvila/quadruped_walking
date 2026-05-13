@@ -59,10 +59,9 @@ def main():
     print(f"Time to JIT compile: {times[1] - times[0]}")
     print(f"Time to Train: {times[-1] - times[1]}")
 
-    import pickle
-    with open('go2_params.pkl', 'wb') as f:
-        pickle.dump(params, f)
-    print("Model saved to go2_params.pkl")
+    model_path = 'go2_params'
+    model.save_params(model_path, params)
+    print(f"Model saved to {model_path}")
 
     plt.ioff()
     plt.show()

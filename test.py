@@ -4,8 +4,8 @@ import numpy as np
 import mujoco
 import mediapy as media
 import functools
-import pickle
 
+from brax.io import model
 from brax.training.agents.ppo import networks as ppo_networks
 from brax.training.acme import running_statistics
 from mujoco_playground import wrapper
@@ -14,6 +14,7 @@ from env import Go2Env
 from configs import NETWORK_FACTORY_CONFIG
 
 COMMAND = jp.array([1.0, 0.0, 0.0])  # vx=1.0 m/s, vy=0.0, yaw=0.0 rad/s
+TIME = 10 # seconds
 
 
 def main():
@@ -39,8 +40,7 @@ def main():
     make_inference_fn = ppo_networks.make_inference_fn(ppo_network)
 
     print("Loading model params...")
-    with open('go2_params.pkl', 'rb') as f:
-        params = pickle.load(f)
+    params = model.load_params('go2_params')
     print("Params loaded.")
 
     inference_fn = make_inference_fn(params, deterministic=True)
@@ -56,7 +56,7 @@ def main():
     state = state.replace(info={
         **state.info,
         'command': COMMAND,
-        'steps_until_cmd': jp.array(999999, dtype=jp.int32),
+        'steps_until_cmd': jp.array(1e9, dtype=jp.int32),
     })
 
     renderer = mujoco.Renderer(env.mj_model, height=480, width=640)
@@ -65,7 +65,7 @@ def main():
     frames = []
     fps = 30
     sim_steps_per_frame = max(1, int((1.0 / fps) / env.dt))
-    total_steps = int(5.0 / env.dt)
+    total_steps = int(TIME / env.dt)
     print(f"Simulating {total_steps} steps ({total_steps * env.dt:.1f} s)...")
 
     for i in range(total_steps):
@@ -80,7 +80,7 @@ def main():
         state = state.replace(info={
             **state.info,
             'command': COMMAND,
-            'steps_until_cmd': jp.array(999999, dtype=jp.int32),
+            'steps_until_cmd': jp.array(1e9, dtype=jp.int32),
         })
 
         if i % sim_steps_per_frame == 0:
