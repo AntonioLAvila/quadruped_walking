@@ -1,3 +1,8 @@
+import jax
+import jax._src.api as _jax_api
+if not hasattr(jax, 'device_put_replicated'):
+    jax.device_put_replicated = _jax_api.device_put_replicated
+
 import functools
 from datetime import datetime
 import matplotlib.pyplot as plt
@@ -30,6 +35,8 @@ def main():
         ax.set_ylabel("reward per episode")
         ax.set_title(f"Reward: {y_data[-1]:.3f}")
         ax.errorbar(x_data, y_data, yerr=y_dataerr, color="blue")
+
+        print(f"Reward: {metrics["eval/episode_reward"]}")
 
         plt.draw()
         plt.pause(0.1)
