@@ -13,7 +13,7 @@ from mujoco_playground import wrapper
 from env import Go2Env
 from configs import NETWORK_FACTORY_CONFIG
 
-COMMAND = jp.array([1.0, 0.0, 0.0])  # vx=1.0 m/s, vy=0.0, yaw=0.0 rad/s
+COMMAND = jp.array([1.5, 0.0, 0.0])  # vx=1.5 m/s, vy=0.0, yaw=0.0 rad/s
 TIME = 10 # seconds
 
 
@@ -26,7 +26,7 @@ def main():
     )
 
     # Wrapped env gives us the same obs/action sizes that training used
-    wrapped_env = wrapper.wrap_for_brax_training(env, episode_length=2000, action_repeat=1)
+    wrapped_env = wrapper.wrap_for_brax_training(env)
     obs_size = wrapped_env.observation_size   # {'state': (48,), 'privileged_state': (123,)}
     action_size = wrapped_env.action_size     # 12
 

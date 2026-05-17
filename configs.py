@@ -4,7 +4,7 @@ PPO_CONFIG = dict(
     num_timesteps=200_000_000,
     num_evals=10,
     num_envs=8192,
-    episode_length=1000, # 5s
+    episode_length=1500, # 7.5s
     action_repeat=1,
     unroll_length=50,
     batch_size=256,
@@ -54,31 +54,31 @@ def default_go2_config() -> config_dict.ConfigDict:
         reward_config=config_dict.create(
             scales=config_dict.create(
                 # Survival
-                healthy=2.0,
+                healthy=1.0,
                 # Tracking.
-                tracking_lin_vel=2.0,
-                tracking_ang_vel=2.0,
+                tracking_lin_vel=3.0,
+                tracking_ang_vel=3.0,
                 # Base penalties.
                 lin_vel_z=-1.0,
                 ang_vel_xy=-0.15,
-                orientation=-8.0,
+                orientation=-6.0,
                 # Other.
-                dof_pos_limits=-1.0,
+                dof_pos_limits=-0.5,
                 pose=0.1,
                 # Other.
                 termination=-20.0,
-                stand_still=-2.0,
+                stand_still=-1.0,
                 # Regularization.
-                torques=-0.0002,
-                action_rate=-0.005,
-                energy=-0.001,
+                torques=-1e-4,
+                action_rate=-1e-4,
+                energy=-1e-4,
                 # Feet.
                 feet_clearance=-0.2,
                 feet_height=-0.2,
                 feet_slip=-0.1,
                 feet_air_time=1.0,
             ),
-            tracking_sigma=0.5,
+            tracking_sigma=2.0,
             max_foot_height=0.1,
         ),
         noise_config=config_dict.create(
