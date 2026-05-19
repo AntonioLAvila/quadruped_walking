@@ -13,7 +13,7 @@ from mujoco_playground import wrapper
 from env import Go2Env
 from configs import NETWORK_FACTORY_CONFIG
 
-COMMAND = jp.array([1.5, 0.0, 0.0])  # vx=1.5 m/s, vy=0.0, yaw=0.0 rad/s
+COMMAND = jp.array([1.0, 0.0, 0.0])  # vx=1.5 m/s, vy=0.0, yaw=0.0 rad/s
 TIME = 10 # seconds
 
 
@@ -82,6 +82,9 @@ def main():
             'command': COMMAND,
             'steps_until_cmd': jp.array(1e9, dtype=jp.int32),
         })
+        
+        # print('----------------------------------------------')
+        # [print(k, v) for k, v in state.info.items()]
 
         if i % sim_steps_per_frame == 0:
             mj_data.qpos[:] = np.array(state.data.qpos)

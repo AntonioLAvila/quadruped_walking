@@ -63,8 +63,6 @@ class Go2Env(MjxEnv):
         q0 = self._q0.copy()
         v0 = jp.zeros(self.mjx_model.nv)
 
-        q0 = q0.at[2].set(self._config.nominal_height)
-
         # # xy +- 0.5
         rng, key = jax.random.split(rng)
         dxy = jax.random.uniform(key, (2,), minval=-0.5, maxval=0.5)
@@ -218,11 +216,11 @@ class Go2Env(MjxEnv):
 
 
     def _get_obs(self, data: mjx.Data, info: dict[str, Any]) -> dict[str, jax.Array]:
-        
         # extract obs
         q = data.qpos[-12:]
         qd = data.qvel[-12:]
         body_v = get_sensor_data(self.mj_model, data, self._local_linvel_sensor_name)
+        # body_v = data.site_xmat[self._imu_site_id].T @ data.qvel[:3]
         gyro = get_sensor_data(self.mj_model, data, self._gyro_sensor_name)
         gravity = data.site_xmat[self._imu_site_id].T @ jp.array([0, 0, -1])
 
@@ -279,7 +277,7 @@ class Go2Env(MjxEnv):
         is_finite = jp.isfinite(jp.concat([data.qpos, data.qvel])).all()
         too_low = data.qpos[2] < self._config.min_height
 
-        return too_low | (body_z_axis[-1] < 0.0) | (~is_finite)
+        return too_low | (body_z_axis[-1] < 0.707) | (~is_finite)
     
     def _get_reward(
         self,
@@ -290,26 +288,24 @@ class Go2Env(MjxEnv):
         first_contact: jax.Array,
         contact: jax.Array
     ) -> dict[str, jax.Array]:
-        body_z = get_sensor_data(self.mj_model, data, self._body_z_axis_sensor_name)
-        # upright^2 so tracking reward drops off quickly with tilt — crossover to negative around 37°.
-        upright = jp.clip(body_z[2], 0.0, 1.0) ** 2
         return {
             "healthy": self._healthy(data.qpos),
             "tracking_lin_vel": self._linvel_tracking(
                 info["command"],
+                # data.site_xmat[self._imu_site_id].T @ data.qvel[:3]
                 get_sensor_data(self.mj_model, data, self._local_linvel_sensor_name)
-            ) * upright,
+            ),
             "tracking_ang_vel": self._angvel_tracking(
                 info["command"],
                 get_sensor_data(self.mj_model, data, self._gyro_sensor_name)
-            ) * upright,
+            ),
             "lin_vel_z": self._cost_linvel_z(get_sensor_data(self.mj_model, data, self._global_linvel_sensor_name)),
             "ang_vel_xy": self._cost_angvel_xy(get_sensor_data(self.mj_model, data, self._global_angvel_sensor_name)),
-            "orientation": self._cost_orientation(body_z),
+            "orientation": self._cost_orientation(get_sensor_data(self.mj_model, data, self._body_z_axis_sensor_name)),
             "stand_still": self._inaction_cost(info["command"], data.qpos[-12:]),
             "termination": self._cost_termination(done),
             "pose": self._pose_reward(data.qpos[-12:]),
-            "torques": self._torque_cost(action),
+            "torques": self._torque_cost(data.actuator_force),
             "action_rate": self._action_rate_cost(
                 action,
                 info["last_act"]
@@ -366,7 +362,7 @@ class Go2Env(MjxEnv):
     
     # ========== REWARDS ==============
     def _healthy(self, q: jax.Array) -> jax.Array:
-        return jp.clip(q[2] / self._config.nominal_height, 0.0, 1.0)
+        return jp.clip(q[2] / self._q0[2], 0.0, 1.0)
 
     def _linvel_tracking(self, commands: jax.Array, local_linvel: jax.Array) -> jax.Array:
         lin_vel_error = jp.sum(jp.square(commands[:2] - local_linvel[:2]))
@@ -395,7 +391,8 @@ class Go2Env(MjxEnv):
         return jp.sum(jp.square(act - last_act))
     
     def _pose_reward(self, q: jax.Array) -> jax.Array:
-        return jp.exp(-jp.sum(jp.square(q - self._q0[-12:])))
+        weight = jp.array([1.0, 1.0, 0.1] * 4)
+        return jp.exp(-jp.sum(jp.square(q - self._q0[-12:]) * weight))
     
     def _inaction_cost(self, commands: jax.Array, q: jax.Array) -> jax.Array:
         cmd_norm = jp.linalg.norm(commands)
@@ -419,7 +416,7 @@ class Go2Env(MjxEnv):
     def _feet_clearance_cost(self, data: mjx.Data) -> jax.Array:
         feet_vel = self._get_feet_vel(data)
         vel_xy = feet_vel[..., :2]
-        vel_norm = jp.sqrt(jp.linalg.norm(vel_xy, axis=-1))
+        vel_norm = jp.linalg.norm(vel_xy, axis=-1)
         foot_pos = data.site_xpos[self._feet_site_ids]
         foot_z = foot_pos[..., -1]
         delta = jp.abs(foot_z - self._config.reward_config.max_foot_height)

@@ -30,9 +30,8 @@ def default_go2_config() -> config_dict.ConfigDict:
     return config_dict.create(
         ctrl_dt=0.005,
         sim_dt=0.0025,
-        action_scale=10.0,
-        nominal_height=0.35,  # standing height of the Go2 base (m)
-        min_height=0.25,      # termination threshold (m)
+        action_scale=30.0,
+        min_height=0.2,      # termination threshold (m)
         history_len=1,
         impl='warp', # using warp. jax is basically unusable rip non-nvidia
         naconmax=4*(2**15),
@@ -54,31 +53,31 @@ def default_go2_config() -> config_dict.ConfigDict:
         reward_config=config_dict.create(
             scales=config_dict.create(
                 # Survival
-                healthy=1.0,
+                healthy=1e-3,
                 # Tracking.
                 tracking_lin_vel=3.0,
-                tracking_ang_vel=3.0,
+                tracking_ang_vel=1.5,
                 # Base penalties.
-                lin_vel_z=-1.0,
-                ang_vel_xy=-0.15,
-                orientation=-6.0,
+                lin_vel_z=-0.5,
+                ang_vel_xy=-0.05,
+                orientation=-5.0,
                 # Other.
-                dof_pos_limits=-0.5,
-                pose=0.1,
+                dof_pos_limits=-1e-3,
+                pose=1e-3,
                 # Other.
-                termination=-20.0,
-                stand_still=-1.0,
+                termination=-5.0,
+                stand_still=0,
                 # Regularization.
-                torques=-1e-4,
-                action_rate=-1e-4,
-                energy=-1e-4,
+                torques=-1e-9,
+                action_rate=-1e-9,
+                energy=-1e-9,
                 # Feet.
-                feet_clearance=-0.2,
+                feet_clearance=-2.0,
                 feet_height=-0.2,
                 feet_slip=-0.1,
-                feet_air_time=1.0,
+                feet_air_time=2.0,
             ),
-            tracking_sigma=2.0,
+            tracking_sigma=0.25,
             max_foot_height=0.1,
         ),
         noise_config=config_dict.create(
