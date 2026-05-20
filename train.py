@@ -1,5 +1,6 @@
 import jax
 import jax._src.api as _jax_api
+# Brax is not updated for jax 10. This is a fix just for now.
 if not hasattr(jax, 'device_put_replicated'):
     jax.device_put_replicated = _jax_api.device_put_replicated
 
