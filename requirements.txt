@@ -1,9 +1,8 @@
-gymnasium==1.2.1
-mujoco==3.3.7
-numpy==2.3.4
-robot_descriptions==1.21.0
-stable_baselines3==2.7.0
-tqdm==4.67.1
-imageio
-tensorboard
-rich
+brax==0.14.2
+jax==0.10.0
+matplotlib==3.10.9
+mediapy==1.2.6
+ml_collections==1.1.0
+mujoco==3.8.1
+mujoco_mjx==3.8.1
+numpy==2.4.6
