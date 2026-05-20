@@ -13,7 +13,7 @@ from mujoco_playground import wrapper
 from env import Go2Env
 from configs import NETWORK_FACTORY_CONFIG, go2_config
 
-COMMAND = jp.array([1.0, 0.0, 0.0])  # vx=1.5 m/s, vy=0.0, yaw=0.0 rad/s
+COMMAND = jp.array([1.0, 0.0, 0.0])  # x, y, rot
 TIME = 10 # seconds
 
 

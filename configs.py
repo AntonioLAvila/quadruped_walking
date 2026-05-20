@@ -60,7 +60,7 @@ def go2_config(cfg) -> config_dict.ConfigDict:
         reward_config=config_dict.create(
             scales=config_dict.create(
                 # Survival
-                healthy=0.01,
+                healthy=0.001,
                 # Tracking.
                 tracking_lin_vel=2.0,
                 tracking_ang_vel=1.0,
@@ -79,9 +79,9 @@ def go2_config(cfg) -> config_dict.ConfigDict:
                 action_rate=-1e-3,
                 energy=-1e-3,
                 # Feet.
-                feet_clearance=-1.0,
-                feet_height=-0.2,
-                feet_slip=-0.1,
+                feet_clearance=-0.5,
+                feet_height=-0.1,
+                feet_slip=-0.5,
                 feet_air_time=0.1,
             ),
             tracking_sigma=0.25,
