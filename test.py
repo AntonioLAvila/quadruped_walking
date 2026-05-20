@@ -11,14 +11,14 @@ from brax.training.acme import running_statistics
 from mujoco_playground import wrapper
 
 from env import Go2Env
-from configs import NETWORK_FACTORY_CONFIG
+from configs import NETWORK_FACTORY_CONFIG, go2_config
 
 COMMAND = jp.array([1.0, 0.0, 0.0])  # vx=1.5 m/s, vy=0.0, yaw=0.0 rad/s
 TIME = 10 # seconds
 
 
 def main():
-    env = Go2Env()
+    env = Go2Env(go2_config('test'))
 
     network_factory = functools.partial(
         ppo_networks.make_ppo_networks,

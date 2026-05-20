@@ -11,11 +11,12 @@ from brax.training.agents.ppo import train as ppo
 from mujoco_playground import wrapper
 from env import Go2Env
 from brax.io import model
-from configs import PPO_CONFIG, NETWORK_FACTORY_CONFIG
+from configs import PPO_CONFIG, NETWORK_FACTORY_CONFIG, go2_config
 
 def main():
-    env = Go2Env()
-    eval_env = Go2Env()
+    cfg = go2_config('train')
+    env = Go2Env(cfg)
+    eval_env = Go2Env(cfg)
 
     x_data, y_data, y_dataerr = [], [], []
     times = [datetime.now()]

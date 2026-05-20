@@ -7,11 +7,10 @@ from mujoco.mjx._src import math
 from mujoco_playground._src.mjx_env import MjxEnv, State, step, make_data, update_assets, get_sensor_data
 from typing import Any
 import mediapy as media
-from configs import default_go2_config
 
 class Go2Env(MjxEnv):
-    def __init__(self):
-        super().__init__(default_go2_config())
+    def __init__(self, config):
+        super().__init__(config)
 
         # load model
         self._xml_path = 'unitree_go2/scene_warp.xml'
@@ -26,6 +25,7 @@ class Go2Env(MjxEnv):
         lowers, uppers = self.mj_model.jnt_range[1:].T # NOTE first joint is the free body
         self._soft_lowers = lowers * self._config.soft_joint_limit_factor
         self._soft_uppers = uppers * self._config.soft_joint_limit_factor
+        self._control_scale = jp.array(self._config.action_scale)
 
         # sites
         FEET = ['FL', 'RL', 'FR', 'RR']
@@ -42,6 +42,9 @@ class Go2Env(MjxEnv):
         self._gyro_sensor_name = 'gyro'
         self._body_z_axis_sensor_name = 'body_z_axis'
         self._feet_linvel_sensor_names = np.array([f'{name}_vel' for name in FEET])
+
+        # dynamics things
+        self._mass = self._mj_model.body_subtreemass[self._torso_body_id]
 
     @property
     def xml_path(self):
@@ -63,7 +66,7 @@ class Go2Env(MjxEnv):
         q0 = self._q0.copy()
         v0 = jp.zeros(self.mjx_model.nv)
 
-        # # xy +- 0.5
+        # xy +- 0.5
         rng, key = jax.random.split(rng)
         dxy = jax.random.uniform(key, (2,), minval=-0.5, maxval=0.5)
         q0 = q0.at[0:2].add(dxy)
@@ -162,7 +165,7 @@ class Go2Env(MjxEnv):
             state = self._handle_kick(state)
 
         # step
-        scaled_action = action*self._config.action_scale
+        scaled_action = action*self._control_scale
         data = step(self.mjx_model, state.data, scaled_action, self.n_substeps)
 
         # handle feet movement
@@ -327,12 +330,51 @@ class Go2Env(MjxEnv):
         }
     
     def _handle_kick(self, orig_state: State) -> State:
+        def generate_direction(rng: jax.Array) -> jax.Array:
+            angle = jax.random.uniform(rng, minval=-jp.pi, maxval=jp.pi)
+            return jp.array([jp.cos(angle), jp.sin(angle), 0])
+
         def kick(state: State) -> State:
-            # TODO implement
+            kick_duration_sec = state.info['kick_duration'] / self.dt
+            t = state.info['kick_steps'] * self.dt
+            u_t = 0.5 * jp.sin(t * jp.pi / kick_duration_sec) # time envelope for kick
+
+            force = u_t * self._mass * state.info['kick_mag'] / kick_duration_sec
+
+            xfrc_applied = jp.zeros((self.mjx_model.nbody, 6))
+            xfrc_applied = xfrc_applied.at[self._torso_body_id, :3].set(force * state.info['kick_dir'])
+            
+            data = state.data.replace(xfrc_applied=xfrc_applied)
+            state = state.replace(data=data)
+
+            state.info['steps_since_kick'] = jp.where(
+                state.info['kick_steps'] >= state.info['kick_duration'],
+                0,
+                state.info['steps_since_kick']
+            )
+            state.info['kick_steps'] += 1
             return state
 
         def dont_kick(state: State) -> State:
-            # TODO implement
+            state.info['rng'], rng = jax.random.split(state.info['rng'])
+            xfrc_applied = jp.zeros((self.mjx_model.nbody, 6))
+
+            data = state.data.replace(xfrc_applied=xfrc_applied)
+
+            state.info['kick_steps'] = jp.where(
+                state.info['steps_since_kick']
+                >= state.info['steps_until_kick'],
+                0,
+                state.info['kick_steps'],
+            )
+            state.info['kick_dir'] = jp.where(
+                state.info['steps_since_kick']
+                >= state.info['steps_until_kick'],
+                generate_direction(rng),
+                state.info['kick_dir'],
+            )
+            state.replace(data=data)
+            state.info['steps_since_kick'] += 1
             return state
 
         return jax.lax.cond(
