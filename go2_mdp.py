@@ -1,21 +1,6 @@
-"""Custom mjlab MDP terms for the faithful Go2 velocity-tracking port.
-
-Every term mirrors the math in ``env.py`` (MuJoCo Playground). Built-in mjlab terms
-are reused where the math already matches exactly (``action_rate_l2``,
-``is_terminated``, ``flat_orientation_l2``, ``bad_orientation``,
-``root_height_below_minimum``, ``time_out``, ``joint_pos_rel``, ``joint_vel_rel``,
-``base_lin_vel``, ``base_ang_vel``, ``projected_gravity``, ``last_action``,
-``generated_commands``, ``reset_root_state_uniform``, ``reset_joints_by_offset``);
-the rest live here.
-
-Contents: velocity command term, privileged observation terms, reward terms, and the
-kick event term.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 
 import torch
 
@@ -33,15 +18,9 @@ from go2_constants import (
   FOOT_SITES,
 )
 
-if TYPE_CHECKING:
-  from mjlab.envs import ManagerBasedRlEnv
+from mjlab.envs import ManagerBasedRlEnv
 
 _ROBOT = SceneEntityCfg("robot")
-
-
-# =====================================================================================
-# Command: faithful reproduction of env.py's _sample_command / reset command logic.
-# =====================================================================================
 
 
 @dataclass(kw_only=True)
@@ -87,7 +66,7 @@ class Go2VelocityCommand(CommandTerm):
     if len(env_ids) == 0:
       return
     self.time_left[env_ids] = (
-      torch.empty(len(env_ids), device=self.device).exponential_(1.0)
+      torch.empty(len(env_ids), device=self.device).exponential_()
       * self.cfg.mean_resample_time_s
     )
     self._resample_command(env_ids)

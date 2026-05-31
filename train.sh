@@ -1,0 +1,1 @@
+python train_go2.py Mjlab-Velocity-Flat-Unitree-Go2

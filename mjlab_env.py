@@ -1,5 +1,4 @@
-"""Faithful mjlab port of the Go2 velocity-tracking environment (was ``env.py``).
-
+"""
 mjlab is manager-based and config-driven: instead of an ``MjxEnv`` subclass with
 ``reset``/``step``, the environment is a ``ManagerBasedRlEnvCfg`` assembled from
 observation/reward/termination/event/command/action *terms*. This module builds that
@@ -58,7 +57,9 @@ from go2_constants import (
   get_feet_contact_sensor_cfg,
   get_go2_robot_cfg,
 )
-from go2_rl_cfg import unitree_go2_ppo_runner_cfg
+from go2_rl_cfg import go2_ppo_runner_cfg
+
+from train_go2 import DEFAULT_NUM_ENVS
 
 TASK_ID = "Mjlab-Velocity-Flat-Unitree-Go2"
 COMMAND_NAME = "twist"
@@ -122,12 +123,12 @@ def _privileged_terms() -> dict[str, ObservationTermCfg]:
 
 
 def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
-  """Build the faithful Go2 velocity-tracking config (flat terrain, torque control)."""
+  """Build the Go2 velocity-tracking config (flat terrain, torque control)."""
   robot_sites = SceneEntityCfg("robot", site_names=FOOT_SITES)
 
   # --- Scene: Go2 on a flat plane + a feet contact sensor. ---
   scene = SceneCfg(
-    num_envs=4096,
+    num_envs=DEFAULT_NUM_ENVS,
     extent=2.0,
     terrain=TerrainEntityCfg(terrain_type="plane"),
     entities={"robot": get_go2_robot_cfg()},
@@ -317,6 +318,6 @@ register_mjlab_task(
   task_id=TASK_ID,
   env_cfg=make_go2_velocity_env_cfg(play=False),
   play_env_cfg=make_go2_velocity_env_cfg(play=True),
-  rl_cfg=unitree_go2_ppo_runner_cfg(),
+  rl_cfg=go2_ppo_runner_cfg(),
   runner_cls=VelocityOnPolicyRunner,
 )

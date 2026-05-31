@@ -14,8 +14,9 @@ from mjlab.rl import (
   RslRlPpoAlgorithmCfg,
 )
 
+from train_go2 import DEFAULT_NUM_IT, NUM_SAVES, DEFAULT_NUM_MINIBATCH, NUM_ROLLOUT
 
-def unitree_go2_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
+def go2_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   return RslRlOnPolicyRunnerCfg(
     actor=RslRlModelCfg(
       hidden_dims=(512, 256, 128),
@@ -38,8 +39,8 @@ def unitree_go2_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       clip_param=0.2,
       entropy_coef=0.01,
       num_learning_epochs=5,
-      num_mini_batches=4,
-      learning_rate=3.0e-4,
+      num_mini_batches=DEFAULT_NUM_MINIBATCH,
+      learning_rate=3e-4,
       schedule="adaptive",
       gamma=0.99,
       lam=0.95,
@@ -47,8 +48,8 @@ def unitree_go2_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       max_grad_norm=1.0,
     ),
     experiment_name="go2_velocity",
-    save_interval=50,
-    num_steps_per_env=24,
-    max_iterations=10_000,
+    save_interval=DEFAULT_NUM_IT//NUM_SAVES,
+    num_steps_per_env=NUM_ROLLOUT,
+    max_iterations=DEFAULT_NUM_IT,
     # obs_groups defaults to {"actor": ("actor",), "critic": ("critic",)}.
   )
