@@ -6,3 +6,5 @@ go2_simulation.mp4
 go2_params.pkl
 go2_params
 go2_test.mp4
+logs
+wandb
