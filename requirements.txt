@@ -1,8 +1,4 @@
-brax==0.14.2
-jax==0.10.0
-matplotlib==3.10.9
-mediapy==1.2.6
-ml_collections==1.1.0
+mjlab==1.4.0
 mujoco==3.8.1
 mujoco_mjx==3.8.1
-numpy==2.4.6
+torch==2.12.0
