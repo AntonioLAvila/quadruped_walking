@@ -18,7 +18,7 @@ import mjlab_env  # noqa: F401  (registers Mjlab-Velocity-Flat-Unitree-Go2 on im
 from mjlab.scripts.train import main
 
 DEFAULT_NUM_ENVS = 2**14
-DEFAULT_NUM_IT = 5000
+DEFAULT_NUM_IT = 600
 DEFAULT_NUM_MINIBATCH = 4
 NUM_ROLLOUT = 64
 NUM_SAVES = 10
