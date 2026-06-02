@@ -17,11 +17,10 @@ To evaluate a trained checkpoint, import this module first so the task is regist
 import mjlab_env  # noqa: F401  (registers Mjlab-Velocity-Flat-Unitree-Go2 on import)
 from mjlab.scripts.train import main
 
-DEFAULT_NUM_ENVS = 2**14
-DEFAULT_NUM_IT = 600
-DEFAULT_NUM_MINIBATCH = 4
-NUM_ROLLOUT = 64
-NUM_SAVES = 10
+DEFAULT_NUM_ENVS = 2**13
+DEFAULT_NUM_IT = 1000
+DEFAULT_NUM_MINIBATCH = 8
+NUM_ROLLOUT = 50
 
 if __name__ == "__main__":
   main()

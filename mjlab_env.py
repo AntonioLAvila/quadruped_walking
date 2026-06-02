@@ -56,6 +56,7 @@ from go2_constants import (
   GO2_ACTION_SCALE,
   get_feet_contact_sensor_cfg,
   get_go2_robot_cfg,
+  DEFAULT_HEIGHT
 )
 from go2_rl_cfg import go2_ppo_runner_cfg
 
@@ -163,7 +164,7 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
 
   # --- Rewards: weight == env.py scale (RewardManager applies the * dt). ---
   rewards = {
-    "healthy": RewardTermCfg(func=go2_mdp.healthy, weight=0.001),
+    "healthy": RewardTermCfg(func=go2_mdp.healthy, weight=1e-3),
     "tracking_lin_vel": RewardTermCfg(
       func=go2_mdp.tracking_lin_vel,
       weight=2.0,
@@ -176,11 +177,11 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     ),
     "lin_vel_z": RewardTermCfg(func=go2_mdp.lin_vel_z, weight=-0.5),
     "ang_vel_xy": RewardTermCfg(func=go2_mdp.ang_vel_xy, weight=-0.05),
-    "orientation": RewardTermCfg(func=flat_orientation_l2, weight=-5.0),
+    "orientation": RewardTermCfg(func=flat_orientation_l2, weight=-2.5),
     "dof_pos_limits": RewardTermCfg(func=go2_mdp.dof_pos_limits, weight=-1.0),
     "pose": RewardTermCfg(
       func=go2_mdp.pose,
-      weight=0.5,
+      weight=1.0,
       params={
         "asset_cfg": SceneEntityCfg("robot", joint_names=(".*",)),
         "weight": {".*_hip_joint": 1.0, ".*_thigh_joint": 1.0, ".*_calf_joint": 0.1},
@@ -191,8 +192,8 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       func=go2_mdp.stand_still, weight=-1.0, params={"command_name": COMMAND_NAME}
     ),
     "torques": RewardTermCfg(func=go2_mdp.torques, weight=-1e-4),
-    "action_rate": RewardTermCfg(func=action_rate_l2, weight=-1e-3),
-    "energy": RewardTermCfg(func=go2_mdp.energy, weight=-1e-3),
+    "action_rate": RewardTermCfg(func=action_rate_l2, weight=-10.0),
+    "energy": RewardTermCfg(func=go2_mdp.energy, weight=-2e-4),
     "feet_clearance": RewardTermCfg(
       func=go2_mdp.feet_clearance,
       weight=-0.5,
@@ -200,7 +201,7 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     ),
     "feet_height": RewardTermCfg(
       func=go2_mdp.feet_height,
-      weight=-0.1,
+      weight=-0.2,
       params={
         "sensor_name": FEET_CONTACT_SENSOR,
         "command_name": COMMAND_NAME,
@@ -211,7 +212,7 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     ),
     "feet_slip": RewardTermCfg(
       func=go2_mdp.feet_slip,
-      weight=-0.5,
+      weight=-0.1,
       params={
         "sensor_name": FEET_CONTACT_SENSOR,
         "command_name": COMMAND_NAME,
@@ -221,7 +222,7 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     ),
     "feet_air_time": RewardTermCfg(
       func=go2_mdp.feet_air_time,
-      weight=0.1,
+      weight=1.0,
       params={
         "sensor_name": FEET_CONTACT_SENSOR,
         "command_name": COMMAND_NAME,
@@ -237,7 +238,7 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       func=bad_orientation, params={"limit_angle": math.pi / 4}  # body_z_axis_z < 0.707
     ),
     "low_height": TerminationTermCfg(
-      func=root_height_below_minimum, params={"minimum_height": 0.2}
+      func=root_height_below_minimum, params={"minimum_height": DEFAULT_HEIGHT - 0.025}
     ),
   }
 

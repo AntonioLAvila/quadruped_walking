@@ -27,6 +27,7 @@ BASE_BODY: str = "base"
 # verified by compiling the stripped spec.
 DEFAULT_HEIGHT: float = 0.27
 BASE_MASS: float = 15.206
+FEET_MIN_HEIGHT: float = 0.01
 
 # Name of the (mjlab-added) feet contact sensor used by the feet rewards/observations.
 FEET_CONTACT_SENSOR: str = "feet_ground_contact"
