@@ -12,7 +12,7 @@ from mjlab.sensor import ContactMatch, ContactSensorCfg
 # MJCF and assets.
 ##
 
-GO2_XML: Path = Path(__file__).parent / "unitree_go2" / "go2_warp.xml"
+GO2_XML: Path = Path(__file__).parent / "mjcf_go2" / "go2_warp.xml"
 assert GO2_XML.exists(), f"Go2 XML not found at {GO2_XML}"
 
 # Foot collision geoms / sites / base body, as named in go2_warp.xml.
