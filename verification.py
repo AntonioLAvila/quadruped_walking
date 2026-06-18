@@ -56,8 +56,7 @@ class ObservationExtractor(LeafSystem):
         self._v_idx = [plant.GetJointByName(j).velocity_start() for j in JOINT_ORDER]
         self._num_q = plant.num_positions()
 
-        self.state_input = self.DeclareVectorInputPort(
-            'plant_state', plant.num_positions() + plant.num_velocities())
+        self.state_input = self.DeclareVectorInputPort('plant_state', plant.num_positions() + plant.num_velocities())
         self.action_input = self.DeclareVectorInputPort('last_action', 12)
 
         self._prev_action_state = self.DeclareDiscreteState(12)
@@ -87,9 +86,16 @@ class ObservationExtractor(LeafSystem):
 
         prev_action = context.get_discrete_state(self._prev_action_state).get_value()
 
-        output.SetFromVector(np.concatenate([
-            joint_pos, joint_vel, base_lin_vel_b, base_ang_vel_b, g_proj_b, prev_action,
-        ]).astype(np.float32))
+        output.SetFromVector(
+            np.concatenate([
+                joint_pos,
+                joint_vel,
+                base_lin_vel_b,
+                base_ang_vel_b,
+                g_proj_b,
+                prev_action,
+            ]).astype(np.float32)
+        )
 
 
 class NNPolicy(LeafSystem):
@@ -105,9 +111,7 @@ class NNPolicy(LeafSystem):
         self._action_state = self.DeclareDiscreteState(12)
         self.DeclarePeriodicDiscreteUpdateEvent(CTRL_DT, 0.0, self._update_action)
 
-        self.output_port = self.DeclareVectorOutputPort(
-            'action', 12, self._calc_action,
-            prerequisites_of_calc={self.xd_ticket()})
+        self.output_port = self.DeclareVectorOutputPort('action', 12, self._calc_action, prerequisites_of_calc={self.xd_ticket()})
 
     def _update_action(self, context: Context, discrete_state: DiscreteValues):
         obs45 = self.obs_input.Eval(context)
@@ -178,7 +182,7 @@ def make_environment(meshcat: Meshcat) -> tuple[DiagramBuilder, MultibodyPlant, 
         plant.AddJointActuator(name, plant.GetJointByName(name), effort_limit=effort)
         plant.GetJointByName(name).set_default_damping(JOINT_DAMPING)
 
-    floor_body, floor_model = add_floor(plant, (50, 50, 0.5), 0.9, 0.9)
+    floor_body, floor_model = add_floor(plant, (50, 50, 0.5), 0.7, 0.5)
 
     plant.set_discrete_contact_approximation(DiscreteContactApproximation.kSap)
     plant.set_contact_model(ContactModel.kHydroelasticWithFallback)
@@ -203,7 +207,7 @@ if __name__ == '__main__':
     extractor = ObservationExtractor(plant)
     builder.AddNamedSystem('obs_extractor', extractor)
 
-    cmd_source = ConstantVectorSource(np.array([0.5, 0.0, 0.0]))
+    cmd_source = ConstantVectorSource(np.array([1.25, 0.0, -0.5]))
     builder.AddNamedSystem('cmd_source', cmd_source)
 
     action_to_torque = builder.AddNamedSystem('action_to_torque', Gain(k=ACTION_SCALE))
@@ -229,6 +233,7 @@ if __name__ == '__main__':
     sim.AdvanceTo(10.0)
     meshcat.StopRecording()
     meshcat.PublishRecording()
+    while 1: pass
 
 
     
