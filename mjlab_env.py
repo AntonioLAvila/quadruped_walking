@@ -56,7 +56,8 @@ from go2_constants import (
   GO2_ACTION_SCALE,
   get_feet_contact_sensor_cfg,
   get_go2_robot_cfg,
-  DEFAULT_HEIGHT
+  DEFAULT_HEIGHT,
+  FEET_MAX_HEIGHT
 )
 from go2_rl_cfg import go2_ppo_runner_cfg
 
@@ -172,32 +173,34 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     ),
     "tracking_ang_vel": RewardTermCfg(
       func=go2_mdp.tracking_ang_vel,
-      weight=1.0,
+      weight=2.0,
       params={"command_name": COMMAND_NAME, "sigma": 0.25},
     ),
     "lin_vel_z": RewardTermCfg(func=go2_mdp.lin_vel_z, weight=-0.5),
-    "ang_vel_xy": RewardTermCfg(func=go2_mdp.ang_vel_xy, weight=-0.05),
-    "orientation": RewardTermCfg(func=flat_orientation_l2, weight=-2.5),
+    "ang_vel_xy": RewardTermCfg(func=go2_mdp.ang_vel_xy, weight=-0.5),
+    "orientation": RewardTermCfg(func=flat_orientation_l2, weight=-5.0),
     "dof_pos_limits": RewardTermCfg(func=go2_mdp.dof_pos_limits, weight=-1.0),
     "pose": RewardTermCfg(
       func=go2_mdp.pose,
       weight=1.0,
       params={
         "asset_cfg": SceneEntityCfg("robot", joint_names=(".*",)),
-        "weight": {".*_hip_joint": 1.0, ".*_thigh_joint": 1.0, ".*_calf_joint": 0.1},
+        "weight": {".*_hip_joint": 1.0, ".*_thigh_joint": 0.8, ".*_calf_joint": 0.1},
       },
     ),
     "termination": RewardTermCfg(func=is_terminated, weight=-1.0),
     "stand_still": RewardTermCfg(
-      func=go2_mdp.stand_still, weight=-1.0, params={"command_name": COMMAND_NAME}
+      func=go2_mdp.stand_still,
+      weight=-1.0,
+      params={"command_name": COMMAND_NAME}
     ),
     "torques": RewardTermCfg(func=go2_mdp.torques, weight=-1e-4),
-    "action_rate": RewardTermCfg(func=action_rate_l2, weight=-10.0),
+    "action_rate": RewardTermCfg(func=action_rate_l2, weight=-5.0),
     "energy": RewardTermCfg(func=go2_mdp.energy, weight=-2e-4),
     "feet_clearance": RewardTermCfg(
       func=go2_mdp.feet_clearance,
-      weight=-0.5,
-      params={"asset_cfg": robot_sites, "max_foot_height": 0.1},
+      weight=-0.2,
+      params={"asset_cfg": robot_sites, "max_foot_height": FEET_MAX_HEIGHT},
     ),
     "feet_height": RewardTermCfg(
       func=go2_mdp.feet_height,
@@ -206,7 +209,7 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
         "sensor_name": FEET_CONTACT_SENSOR,
         "command_name": COMMAND_NAME,
         "asset_cfg": robot_sites,
-        "max_foot_height": 0.1,
+        "max_foot_height": FEET_MAX_HEIGHT,
         "command_threshold": 0.01,
       },
     ),

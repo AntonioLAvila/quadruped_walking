@@ -12,25 +12,26 @@ from mjlab.sensor import ContactMatch, ContactSensorCfg
 # MJCF and assets.
 ##
 
-GO2_XML: Path = Path(__file__).parent / "mjcf_go2" / "go2_warp.xml"
+GO2_XML = Path(__file__).parent / "mjcf_go2" / "go2_warp.xml"
 assert GO2_XML.exists(), f"Go2 XML not found at {GO2_XML}"
 
 # Foot collision geoms / sites / base body, as named in go2_warp.xml.
-FEET: tuple[str, ...] = ("FL", "FR", "RL", "RR")
-FOOT_GEOMS: tuple[str, ...] = FEET
-FOOT_SITES: tuple[str, ...] = tuple(f"{f}_site" for f in FEET)
-BASE_BODY: str = "base"
+FEET = ("FL", "FR", "RL", "RR")
+FOOT_GEOMS = FEET
+FOOT_SITES = tuple(f"{f}_site" for f in FEET)
+BASE_BODY = "base"
 
 # Default standing height (home keyframe qpos z) and base subtree mass.
 # DEFAULT_HEIGHT feeds the "healthy" reward; BASE_MASS feeds the kick force scaling.
 # BASE_MASS is body_subtreemass[base] from the compiled model (== total robot mass);
 # verified by compiling the stripped spec.
-DEFAULT_HEIGHT: float = 0.27
-BASE_MASS: float = 15.206
-FEET_MIN_HEIGHT: float = 0.01
+DEFAULT_HEIGHT = 0.27
+BASE_MASS = 15.206
+FEET_MIN_HEIGHT = 0.01
+FEET_MAX_HEIGHT = 0.15
 
 # Name of the (mjlab-added) feet contact sensor used by the feet rewards/observations.
-FEET_CONTACT_SENSOR: str = "feet_ground_contact"
+FEET_CONTACT_SENSOR = "feet_ground_contact"
 
 
 def get_spec() -> mujoco.MjSpec:
@@ -56,7 +57,7 @@ def get_spec() -> mujoco.MjSpec:
 ##
 
 # Per-joint action scale for JointEffortActionCfg: action (~[-1, 1]) -> torque.
-GO2_ACTION_SCALE: dict[str, float] = {
+GO2_ACTION_SCALE = {
   ".*_hip_joint": 23.7,
   ".*_thigh_joint": 23.7,
   ".*_calf_joint": 45.43,

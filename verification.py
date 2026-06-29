@@ -43,7 +43,7 @@ DEFAULT_JOINT_POS = np.array([0.0, 0.9, -1.8] * 4)
 ACTION_SCALE = np.array([23.7, 23.7, 45.43] * 4)
 JOINT_DAMPING = 2.0
 CTRL_DT = 0.005
-ONNX_POLICY_PATH = Path(__file__).parent / "logs/rsl_rl/go2_velocity/best/2026-06-01_17-10-55.onnx"
+ONNX_POLICY_PATH = Path(__file__).parent / "logs/rsl_rl/go2_velocity/best/model.onnx"
 
 
 class ObservationExtractor(LeafSystem):
@@ -207,7 +207,7 @@ if __name__ == '__main__':
     extractor = ObservationExtractor(plant)
     builder.AddNamedSystem('obs_extractor', extractor)
 
-    cmd_source = ConstantVectorSource(np.array([1.25, 0.0, -0.5]))
+    cmd_source = ConstantVectorSource(np.array([1.25, 0.0, 0.0]))
     builder.AddNamedSystem('cmd_source', cmd_source)
 
     action_to_torque = builder.AddNamedSystem('action_to_torque', Gain(k=ACTION_SCALE))
