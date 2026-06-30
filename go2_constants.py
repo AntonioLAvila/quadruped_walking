@@ -1,12 +1,17 @@
+"""Physical/robot constants for the Unitree Go2.
+
+Pure data only (stdlib imports only) so this module can be imported from any
+environment that needs to agree with mjlab's Go2 setup -- including
+``verification.py``'s separate pydrake environment, which has neither
+``mujoco`` nor ``mjlab`` installed.
+
+mjlab-specific config builders (``EntityCfg``, ``ContactSensorCfg``, etc.)
+live in ``go2_robot.py``, which imports the constants defined here.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
-
-import mujoco
-
-from mjlab.actuator import XmlActuatorCfg
-from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
-from mjlab.sensor import ContactMatch, ContactSensorCfg
 
 ##
 # MJCF and assets.
@@ -33,81 +38,34 @@ FEET_MAX_HEIGHT = 0.15
 # Name of the (mjlab-added) feet contact sensor used by the feet rewards/observations.
 FEET_CONTACT_SENSOR = "feet_ground_contact"
 
-
-def get_spec() -> mujoco.MjSpec:
-  """Load the Go2 MJCF and make it mjlab-compatible.
-    * delete the ``<keyframe>``            - mjlab sets initial state from InitialStateCfg.
-    * delete every ``<sensor>`` except ``accelerometer`` - the 4 ``*_floor_contact``
-      sensors reference a ``floor`` geom that lives only in the scene wrapper (so a
-      standalone compile would fail), and every other quantity we need is available
-      via EntityData. We keep ``accelerometer`` because the privileged observation
-      reads it and there is no equivalent EntityData accessor.
-  """
-  spec = mujoco.MjSpec.from_file(str(GO2_XML))
-  for key in list(spec.keys):
-    spec.delete(key)
-  for sensor in list(spec.sensors):
-    if sensor.name != "accelerometer":
-      spec.delete(sensor)
-  return spec
-
-
 ##
-# Actuators (torque / motor control).
+# Joints: single source of truth for names, default pose, and torque limits.
 ##
 
-# Per-joint action scale for JointEffortActionCfg: action (~[-1, 1]) -> torque.
-GO2_ACTION_SCALE = {
-  ".*_hip_joint": 23.7,
-  ".*_thigh_joint": 23.7,
-  ".*_calf_joint": 45.43,
-}
+# Per-leg joint types, in the order each leg's joints appear in the MJCF/URDF.
+JOINT_TYPES = ("hip", "thigh", "calf")
+
+# Home keyframe pose: per-leg [hip=0, thigh=0.9, calf=-1.8].
+DEFAULT_JOINT_ANGLES = {"hip": 0.0, "thigh": 0.9, "calf": -1.8}
+
+# Per-joint-type torque limit (N*m); action (~[-1, 1]) -> torque scale.
+JOINT_TORQUE_LIMITS = {"hip": 23.7, "thigh": 23.7, "calf": 45.43}
+
+# Explicit per-joint names in FL, FR, RL, RR x hip, thigh, calf order, e.g. for
+# code (Drake) that needs to align a flat per-joint array to the model's joints.
+JOINT_NAMES = tuple(f"{leg}_{jt}_joint" for leg in FEET for jt in JOINT_TYPES)
+
+# Flat per-joint arrays aligned to JOINT_NAMES.
+DEFAULT_JOINT_POS = tuple(DEFAULT_JOINT_ANGLES[jt] for _ in FEET for jt in JOINT_TYPES)
+JOINT_TORQUE_LIMITS_FLAT = tuple(JOINT_TORQUE_LIMITS[jt] for _ in FEET for jt in JOINT_TYPES)
+
+# Regex-keyed action scale for mjlab's JointEffortActionCfg.
+GO2_ACTION_SCALE = {f".*_{jt}_joint": JOINT_TORQUE_LIMITS[jt] for jt in JOINT_TYPES}
 
 ##
-# Initial state (home keyframe: z=0.27, per-leg [hip=0, thigh=0.9, calf=-1.8]).
+# Control timing.
 ##
 
-INIT_STATE = EntityCfg.InitialStateCfg(
-  pos=(0.0, 0.0, DEFAULT_HEIGHT),
-  joint_pos={
-    ".*_hip_joint": 0.0,
-    ".*_thigh_joint": 0.9,
-    ".*_calf_joint": -1.8,
-  },
-  joint_vel={".*": 0.0},
-)
-
-GO2_ARTICULATION = EntityArticulationInfoCfg(
-  actuators=(XmlActuatorCfg(target_names_expr=('.*',)),),
-  soft_joint_pos_limit_factor=0.95,
-)
-
-def get_go2_robot_cfg() -> EntityCfg:
-  return EntityCfg(
-    init_state=INIT_STATE,
-    spec_fn=get_spec,
-    articulation=GO2_ARTICULATION,
-  )
-
-
-def get_feet_contact_sensor_cfg() -> ContactSensorCfg:
-  """Contact sensor for the four feet vs. the flat terrain plane.
-
-  Provides per-foot contact (``found``), net force, and air-time tracking used by
-  the feet rewards and the privileged contact/air-time observations. The terrain
-  plane body is named ``terrain`` by mjlab's TerrainEntity.
-  """
-  return ContactSensorCfg(
-    name=FEET_CONTACT_SENSOR,
-    primary=ContactMatch(mode="geom", pattern=FOOT_GEOMS, entity="robot"),
-    secondary=ContactMatch(mode="body", pattern="terrain"),
-    fields=("found", "force"),
-    reduce="netforce",
-    num_slots=1,
-    track_air_time=True,
-  )
-
-
-if __name__ == "__main__":
-  m = get_spec().compile()
-  print(f"Go2 spec OK: nu={m.nu} nq={m.nq} nv={m.nv} nbody={m.nbody} nsensor={m.nsensor}")
+SIM_TIMESTEP = 0.0025
+DECIMATION = 2
+CTRL_DT = SIM_TIMESTEP * DECIMATION

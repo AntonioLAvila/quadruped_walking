@@ -7,8 +7,9 @@ registers the task so it can be trained with mjlab's CLI:
 
     python train_go2.py Mjlab-Velocity-Flat-Unitree-Go2
 
-The robot setup lives in ``go2_constants.py`` and the custom terms in ``go2_mdp.py``.
-The original ``env.py``/``train.py``/``configs.py`` are left untouched (brax reference).
+Robot constants live in ``go2_constants.py``, the mjlab scene/entity builders in
+``go2_robot.py``, and the custom MDP terms in ``go2_mdp.py``. The original
+``env.py``/``train.py``/``configs.py`` are left untouched (brax reference).
 """
 
 from __future__ import annotations
@@ -51,17 +52,14 @@ import go2_mdp
 from go2_constants import (
   BASE_BODY,
   BASE_MASS,
+  DEFAULT_HEIGHT,
   FEET_CONTACT_SENSOR,
+  FEET_MAX_HEIGHT,
   FOOT_SITES,
   GO2_ACTION_SCALE,
-  get_feet_contact_sensor_cfg,
-  get_go2_robot_cfg,
-  DEFAULT_HEIGHT,
-  FEET_MAX_HEIGHT
 )
-from go2_rl_cfg import go2_ppo_runner_cfg
-
-from train_go2 import DEFAULT_NUM_ENVS
+from go2_robot import get_feet_contact_sensor_cfg, get_go2_robot_cfg
+from go2_rl_cfg import DEFAULT_NUM_ENVS, go2_ppo_runner_cfg
 
 TASK_ID = "Mjlab-Velocity-Flat-Unitree-Go2"
 COMMAND_NAME = "twist"

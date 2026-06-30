@@ -2,7 +2,9 @@
 
 mjlab's ``train`` entry point only imports ``mjlab.tasks``; importing ``mjlab_env`` here
 registers ``Mjlab-Velocity-Flat-Unitree-Go2`` into the same registry before mjlab lists
-the available tasks. This is registry glue only.
+the available tasks. This is registry glue only. Default env/iteration counts live in
+``go2_rl_cfg.py`` (imported by ``mjlab_env``), not here, so this module has nothing for
+``mjlab_env`` to import back -- avoids a self-import cycle when run as a script.
 
 Usage:
     python train_go2.py Mjlab-Velocity-Flat-Unitree-Go2
@@ -16,11 +18,6 @@ To evaluate a trained checkpoint, import this module first so the task is regist
 
 import mjlab_env  # noqa: F401  (registers Mjlab-Velocity-Flat-Unitree-Go2 on import)
 from mjlab.scripts.train import main
-
-DEFAULT_NUM_ENVS = 2**13
-DEFAULT_NUM_IT = 1000
-DEFAULT_NUM_MINIBATCH = 8
-NUM_ROLLOUT = 50
 
 if __name__ == "__main__":
   main()

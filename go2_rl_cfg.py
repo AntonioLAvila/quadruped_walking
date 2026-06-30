@@ -14,7 +14,11 @@ from mjlab.rl import (
   RslRlPpoAlgorithmCfg,
 )
 
-from train_go2 import DEFAULT_NUM_IT, DEFAULT_NUM_MINIBATCH, NUM_ROLLOUT
+DEFAULT_NUM_ENVS = 2**13
+DEFAULT_NUM_IT = 1000
+DEFAULT_NUM_MINIBATCH = 8
+NUM_ROLLOUT = 50
+
 
 def go2_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
   return RslRlOnPolicyRunnerCfg(

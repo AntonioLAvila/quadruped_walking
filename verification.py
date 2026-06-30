@@ -31,18 +31,15 @@ from pydrake.all import (
 )
 from robot_descriptions import go2_description
 
-q0 = [1, 0, 0, 0] + [0, 0, 0.3] + [0, 0.9, -1.8]*4
-# Joint order used throughout training
-JOINT_ORDER = (
-    "FL_hip_joint", "FL_thigh_joint", "FL_calf_joint",
-    "FR_hip_joint", "FR_thigh_joint", "FR_calf_joint",
-    "RL_hip_joint", "RL_thigh_joint", "RL_calf_joint",
-    "RR_hip_joint", "RR_thigh_joint", "RR_calf_joint",
-)
-DEFAULT_JOINT_POS = np.array([0.0, 0.9, -1.8] * 4)
-ACTION_SCALE = np.array([23.7, 23.7, 45.43] * 4)
+from go2_constants import CTRL_DT, DEFAULT_JOINT_POS, JOINT_NAMES, JOINT_TORQUE_LIMITS_FLAT
+
+# Joint order used throughout training (this env's drop height, not the mjlab
+# standing height -- the robot settles onto the floor from a small drop).
+JOINT_ORDER = JOINT_NAMES
+DEFAULT_JOINT_POS = np.array(DEFAULT_JOINT_POS)
+q0 = [1, 0, 0, 0] + [0, 0, 0.3] + list(DEFAULT_JOINT_POS)
+ACTION_SCALE = np.array(JOINT_TORQUE_LIMITS_FLAT)
 JOINT_DAMPING = 2.0
-CTRL_DT = 0.005
 ONNX_POLICY_PATH = Path(__file__).parent / "logs/rsl_rl/go2_velocity/best/model.onnx"
 
 
@@ -233,7 +230,7 @@ if __name__ == '__main__':
     sim.AdvanceTo(10.0)
     meshcat.StopRecording()
     meshcat.PublishRecording()
-    while 1: pass
+    input("Recording published. Press Enter to exit...")
 
 
     
