@@ -17,6 +17,7 @@ from __future__ import annotations
 import math
 
 from mjlab.envs import ManagerBasedRlEnvCfg
+from mjlab.envs.mdp import dr
 from mjlab.envs.mdp.actions import JointEffortActionCfg
 from mjlab.envs.mdp.events import reset_joints_by_offset, reset_root_state_uniform
 from mjlab.envs.mdp.observations import (
@@ -55,6 +56,7 @@ from go2_constants import (
   DEFAULT_HEIGHT,
   FEET_CONTACT_SENSOR,
   FEET_MAX_HEIGHT,
+  FOOT_GEOMS,
   FOOT_SITES,
   GO2_ACTION_SCALE,
 )
@@ -63,6 +65,17 @@ from go2_rl_cfg import DEFAULT_NUM_ENVS, go2_ppo_runner_cfg
 
 TASK_ID = "Mjlab-Velocity-Flat-Unitree-Go2"
 COMMAND_NAME = "twist"
+
+# Domain-randomization event keys (disabled together in deterministic `play` eval).
+_DR_EVENT_KEYS = (
+  "base_inertial",
+  "foot_friction",
+  "foot_friction_torsion_roll",
+  "joint_frictionloss",
+  "joint_damping",
+  "joint_armature",
+  "encoder_bias",
+)
 
 # env.py noise_config (level 1.0): per-signal uniform noise scales.
 _NOISE = {
@@ -243,8 +256,75 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     ),
   }
 
-  # --- Events: reset randomization + the stochastic kick. ---
+  # --- Events: physical domain randomization + reset randomization + the kick. ---
+  #
+  # The observation noise (above) and the kick (below) already model sensing noise
+  # and external disturbances. The terms here close the remaining sim-to-real gap:
+  # the *physical parameters* that are never known exactly on hardware. They are all
+  # ``startup`` events, so each parallel env is built once with its own sampled
+  # dynamics and the policy must learn a controller robust across the whole range.
+  feet = SceneEntityCfg("robot", geom_names=FOOT_GEOMS)
+  base = SceneEntityCfg("robot", body_names=BASE_BODY)
+  all_joints = SceneEntityCfg("robot", joint_names=(".*",))
   events = {
+    # Base mass / inertia / CoM: payload and build-to-build mass uncertainty.
+    # pseudo_inertia perturbs mass, inertia, ipos and iquat *consistently* (so the
+    # inertia tensor tracks the mass change). alpha is a log mass-density scale, so
+    # mass scales by exp(2*alpha) ~= [0.82, 1.22]; t shifts the CoM by +/- 2 cm.
+    "base_inertial": EventTermCfg(
+      func=dr.pseudo_inertia,
+      mode="startup",
+      params={"asset_cfg": base, "alpha_range": (-0.1, 0.1), "t_range": (-0.02, 0.02)},
+    ),
+    # Foot-ground tangential friction (per foot, so legs can see different grip).
+    "foot_friction": EventTermCfg(
+      func=dr.geom_friction,
+      mode="startup",
+      params={
+        "asset_cfg": feet,
+        "operation": "abs",
+        "axes": [0],
+        "ranges": (0.4, 1.2),
+        "shared_random": False,
+      },
+    ),
+    # Torsional / rolling friction (the foot contacts are condim 6, so these matter).
+    "foot_friction_torsion_roll": EventTermCfg(
+      func=dr.geom_friction,
+      mode="startup",
+      params={
+        "asset_cfg": feet,
+        "operation": "abs",
+        "distribution": "log_uniform",
+        "axes": [1, 2],
+        "ranges": {1: (5e-3, 5e-2), 2: (1e-3, 2e-2)},
+        "shared_random": False,
+      },
+    ),
+    # Joint dry friction (frictionloss), viscous damping, and reflected rotor inertia
+    # (armature): the dominant unmodeled actuator/transmission dynamics. Scaled per
+    # joint about the MJCF defaults (frictionloss 0.2, damping 2.0, armature 0.01).
+    "joint_frictionloss": EventTermCfg(
+      func=dr.joint_friction,
+      mode="startup",
+      params={"asset_cfg": all_joints, "operation": "scale", "ranges": (0.5, 1.5)},
+    ),
+    "joint_damping": EventTermCfg(
+      func=dr.joint_damping,
+      mode="startup",
+      params={"asset_cfg": all_joints, "operation": "scale", "ranges": (0.75, 1.25)},
+    ),
+    "joint_armature": EventTermCfg(
+      func=dr.joint_armature,
+      mode="startup",
+      params={"asset_cfg": all_joints, "operation": "scale", "ranges": (0.75, 1.25)},
+    ),
+    # Constant per-joint encoder offset: real joint encoders are imperfectly zeroed.
+    "encoder_bias": EventTermCfg(
+      func=dr.encoder_bias,
+      mode="startup",
+      params={"asset_cfg": all_joints, "bias_range": (-0.02, 0.02)},
+    ),
     "reset_base": EventTermCfg(
       func=reset_root_state_uniform,
       mode="reset",
@@ -307,11 +387,14 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   )
 
   if play:
-    # Deterministic eval: no observation noise, no kicks, ~infinite episode.
+    # Deterministic eval: no observation noise, no kicks, nominal physics (no DR),
+    # ~infinite episode.
     cfg.episode_length_s = int(1e9)
     cfg.observations["actor"].enable_corruption = False
     cfg.observations["critic"].enable_corruption = False
     cfg.events.pop("kick", None)
+    for key in _DR_EVENT_KEYS:
+      cfg.events.pop(key, None)
 
   return cfg
 
