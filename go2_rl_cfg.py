@@ -2,8 +2,8 @@
 
 Cloned from mjlab's Go1 velocity ``rl_cfg.py`` and nudged toward the brax PPO setup in
 ``configs.py`` (same MLP sizes, entropy, discount; observation normalization on to mirror
-``normalize_observations=True``). The actor reads the ``actor`` (48-dim) observation group
-and the critic reads ``critic`` (123-dim), i.e. asymmetric actor-critic.
+``normalize_observations=True``). The actor reads the ``actor`` (45-dim) observation group
+and the critic reads ``critic`` (120-dim), i.e. asymmetric actor-critic.
 """
 
 from __future__ import annotations

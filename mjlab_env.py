@@ -2,7 +2,7 @@
 mjlab is manager-based and config-driven: instead of an ``MjxEnv`` subclass with
 ``reset``/``step``, the environment is a ``ManagerBasedRlEnvCfg`` assembled from
 observation/reward/termination/event/command/action *terms*. This module builds that
-config for the Go2 (torque control, flat terrain, asymmetric 48/123 observations) and
+config for the Go2 (torque control, flat terrain, asymmetric 45/120 observations) and
 registers the task so it can be trained with mjlab's CLI:
 
     python train_go2.py Mjlab-Velocity-Flat-Unitree-Go2
@@ -88,11 +88,15 @@ _NOISE = {
 
 
 def _actor_terms() -> dict[str, ObservationTermCfg]:
-  """The 48-dim policy observation (fresh cfg objects each call)."""
+  """The 45-dim policy observation (fresh cfg objects each call)."""
   return {
     "joint_pos": ObservationTermCfg(func=joint_pos_rel, noise=_NOISE["joint_pos"]),
     "joint_vel": ObservationTermCfg(func=joint_vel_rel, noise=_NOISE["joint_vel"]),
-    "base_lin_vel": ObservationTermCfg(func=base_lin_vel, noise=_NOISE["base_lin_vel"]),
+    # Base *linear* velocity is not reliably observable on the real Go2 (no reliable
+    # state estimate for it), so the policy is trained blind to it. The critic still
+    # sees the true value via "base_lin_vel_priv". Angular velocity stays: it is a
+    # direct IMU gyro reading on hardware.
+    # "base_lin_vel": ObservationTermCfg(func=base_lin_vel, noise=_NOISE["base_lin_vel"]),
     "base_ang_vel": ObservationTermCfg(func=base_ang_vel, noise=_NOISE["base_ang_vel"]),
     "projected_gravity": ObservationTermCfg(
       func=projected_gravity, noise=_NOISE["projected_gravity"]
@@ -140,15 +144,17 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
   robot_sites = SceneEntityCfg("robot", site_names=FOOT_SITES)
 
   # --- Scene: Go2 on a flat plane + a feet contact sensor. ---
+  # Actuator command latency is DR too, but it lives on the actuator cfg rather
+  # than in `events`, so it is disabled here rather than popped in the play block.
   scene = SceneCfg(
     num_envs=DEFAULT_NUM_ENVS,
     extent=2.0,
     terrain=TerrainEntityCfg(terrain_type="plane"),
-    entities={"robot": get_go2_robot_cfg()},
+    entities={"robot": get_go2_robot_cfg(command_delay=not play)},
     sensors=(get_feet_contact_sensor_cfg(),),
   )
 
-  # --- Observations: actor (48, noisy) + critic (123 = noisy 48 ++ clean 75). ---
+  # --- Observations: actor (45, noisy) + critic (120 = noisy 45 ++ clean 75). ---
   observations = {
     "actor": ObservationGroupCfg(
       terms=_actor_terms(), concatenate_terms=True, enable_corruption=True
@@ -156,7 +162,7 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     "critic": ObservationGroupCfg(
       terms={**_actor_terms(), **_privileged_terms()},
       concatenate_terms=True,
-      enable_corruption=True,  # noisy first-48; appended terms have no noise cfg.
+      enable_corruption=True,  # noisy first-45; appended terms have no noise cfg.
     ),
   }
 
@@ -314,10 +320,15 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       mode="startup",
       params={"asset_cfg": all_joints, "operation": "scale", "ranges": (0.75, 1.25)},
     ),
+    # Armature is the least well known of these. Menagerie ships a flat 0.01 for
+    # every joint; Unitree's own RL config uses 0.02 for the knee -- a 2x spread on
+    # the value we cannot measure. GO2_ACTUATORS takes Unitree's numbers, and this
+    # range is widened to (0.5, 2.0) so the whole span of that disagreement stays
+    # in distribution rather than betting the policy on one end of it.
     "joint_armature": EventTermCfg(
       func=dr.joint_armature,
       mode="startup",
-      params={"asset_cfg": all_joints, "operation": "scale", "ranges": (0.75, 1.25)},
+      params={"asset_cfg": all_joints, "operation": "scale", "ranges": (0.5, 2.0)},
     ),
     # Constant per-joint encoder offset: real joint encoders are imperfectly zeroed.
     "encoder_bias": EventTermCfg(

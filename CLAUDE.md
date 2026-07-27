@@ -25,7 +25,8 @@ bash eval.sh   # or the python -c one-liner it wraps, editing the --checkpoint-f
 # Sim-to-sim verification of an exported ONNX policy in Drake + meshcat.
 python verification.py   # edit ONNX_POLICY_PATH inside first
 
-# Sanity-check the robot MJCF compiles under mjlab (prints nu/nq/nv/nbody/nsensor).
+# Sanity-check the (upstream) robot MJCF still matches what this repo assumes. Asserts
+# topology/mass/names/margin/ctrlrange, then prints nu/nq/nv/nbody/nsensor.
 python go2_robot.py
 ```
 
@@ -50,7 +51,8 @@ and register it as a task. The pieces:
   observations, the stochastic kick event, terrain-relative terminations, NaN-safety helpers).
 - **`go2_robot.py`** — mjlab scene/entity/sensor *builders* (need `mujoco`/`mjlab`): the Go2
   `EntityCfg`, the feet contact sensor, and the terrain-clearance raycast sensors.
-- **`go2_constants.py`** — pure physical constants, **stdlib-only on purpose** (see firewall below).
+- **`go2_constants.py`** — pure physical constants **and the `GO2_ACTUATORS` table**, stdlib-only on
+  purpose (see firewall below).
 - **`go2_rl_cfg.py`** — the rsl_rl PPO cfg (MLP sizes, PPO hyperparams, obs normalization).
 - **`verification.py`** — standalone pydrake diagram: loads the URDF, wires an
   `ObservationExtractor` → ONNX `NNPolicy` → torque `Gain` control loop.
@@ -63,17 +65,37 @@ Drake side (`verification.py`, which has pydrake but *neither* mujoco nor mjlab)
 `mujoco`/`mjlab` import in `go2_constants.py` breaks `verification.py`. mjlab-specific builders go in
 `go2_robot.py` instead.
 
-**Asymmetric actor/critic observations (48 vs 128).** The actor group is 48-dim and **blind**
-(joint pos/vel, base lin/ang vel, projected gravity, last action, command) — that is the only thing
-exported to ONNX and the only thing deployable on hardware. The critic group is those same 48 plus
-~80 dims of **privileged** terms (true velocities, contact/air-time, kick force, terrain
-clearances). Defined in `_actor_terms()` / `_privileged_terms()` in `mjlab_env.py`; consumed by the
+**`GO2_ACTUATORS` is the single source of truth for actuator dynamics, and the MJCF is not
+vendored.** `go2_constants.GO2_ACTUATORS` holds per-joint-type `effort_limit` / `armature` /
+`damping` / `frictionloss` / `kp` / `kd`. Both simulators configure themselves *from* it, so they
+cannot drift: `go2_robot._actuator_cfgs()` passes `armature`/`frictionloss`/`viscous_damping` to
+three `XmlActuatorCfg` groups (mjlab treats a non-`None` value as an override of the XML, so the
+model's own numbers never matter), and `verification.py` feeds the same table to Drake's
+`set_default_rotor_inertia`, `set_default_damping`, and the torque `Saturation`. **Never hard-code an
+actuator parameter at a call site.** Values follow Unitree's own mjlab config
+([unitree_rl_mjlab](https://github.com/unitreerobotics/unitree_rl_mjlab)), not Menagerie's generic
+defaults — notably the knee armature is `0.02`, twice Menagerie's flat `0.01`.
+
+`go2_robot.get_spec()` builds the model from upstream `robot_descriptions.go2_mj_description` and
+applies exactly four deltas (margin 0, four foot sites, the `accelerometer` sensor, effort limits
+from the table). Because the model now tracks upstream, `go2_robot.check_spec()` asserts topology,
+total mass, geom/site/sensor names, margin, and ctrlrange — run `python go2_robot.py` after any
+`robot_descriptions` bump.
+
+**Asymmetric actor/critic observations (45 vs 120).** The actor group is 45-dim and **blind**
+(joint pos/vel, base *angular* vel, projected gravity, last action, command) — that is the only
+thing exported to ONNX and the only thing deployable on hardware. Base **linear** velocity is
+deliberately commented out of `_actor_terms()`: there is no reliable estimate of it on the real Go2,
+so the policy must not depend on it. It stays in the critic as `base_lin_vel_priv`. The critic group
+is the actor's 45 plus 75 dims of **privileged** terms (true velocities, contact/air-time, kick
+force). Defined in `_actor_terms()` / `_privileged_terms()` in `mjlab_env.py`; consumed by the
 `obs_groups` default in `go2_rl_cfg.py`. If you add/remove/reorder an actor term you **must** mirror
-the exact same layout in `verification.py`'s `ObservationExtractor` (it hand-builds a 45-dim vector +
-3-dim command = 48 in that order), or the deployed policy silently gets garbage input.
+the exact same layout in `verification.py`'s `ObservationExtractor` (it hand-builds a 42-dim vector +
+3-dim command = 45 in that order), or the deployed policy silently gets garbage input.
 
 **Torque (direct-effort) control.** Action is `JointEffortActionCfg` scaled by `GO2_ACTION_SCALE`
-(per-joint torque limits `[23.7, 23.7, 45.43]`): action ≈ [-1, 1] × scale = joint torque.
+(derived from `GO2_ACTUATORS`, i.e. per-joint torque limits `[23.5, 23.5, 45.0]`): action ≈ [-1, 1]
+× scale = joint torque.
 `verification.py` reproduces this with a `Gain(k=ACTION_SCALE)` on the ONNX output. Because it is a
 direct-torque `<motor>`/`XmlActuator`, PD/position-actuator DR (e.g. `dr.effort_limits`,
 `dr.pd_gains`) does **not** apply here.

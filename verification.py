@@ -26,21 +26,49 @@ from pydrake.all import (
     Context,
     DiscreteValues,
     BasicVector,
-    ConstantVectorSource,
+    Saturation,
     Gain,
 )
 from robot_descriptions import go2_description
 
-from go2_constants import CTRL_DT, DEFAULT_JOINT_POS, JOINT_NAMES, JOINT_TORQUE_LIMITS_FLAT
+from go2_constants import (
+    CTRL_DT,
+    DEFAULT_HEIGHT,
+    DEFAULT_JOINT_POS,
+    GO2_ACTUATORS,
+    JOINT_NAMES,
+    JOINT_TORQUE_LIMITS_FLAT,
+)
 
-# Joint order used throughout training (this env's drop height, not the mjlab
-# standing height -- the robot settles onto the floor from a small drop).
+# Joint order used throughout training. The robot starts at the MJCF home height so
+# the policy sees the initial condition it was reset to in training, instead of being
+# asked to track a velocity while still in free fall.
 JOINT_ORDER = JOINT_NAMES
 DEFAULT_JOINT_POS = np.array(DEFAULT_JOINT_POS)
-q0 = [1, 0, 0, 0] + [0, 0, 0.3] + list(DEFAULT_JOINT_POS)
+q0 = [1, 0, 0, 0] + [0, 0, DEFAULT_HEIGHT] + list(DEFAULT_JOINT_POS)
 ACTION_SCALE = np.array(JOINT_TORQUE_LIMITS_FLAT)
-JOINT_DAMPING = 2.0
-ONNX_POLICY_PATH = Path(__file__).parent / "logs/rsl_rl/go2_velocity/best/model.onnx"
+# Every actuator parameter comes from GO2_ACTUATORS in go2_constants.py, the same
+# table go2_robot.py feeds to mjlab -- so the two simulators cannot drift apart.
+# Nothing actuator-related may be hard-coded in this file.
+#
+#   armature -> Drake reflected inertia (rotor_inertia * gear_ratio^2, gear_ratio 1).
+#               MuJoCo adds it to the joint-space inertia diagonal; without it the
+#               knee sees ~2.6x the angular acceleration for a given torque.
+#   damping  -> Drake joint damping, matching MuJoCo's <joint damping>.
+#   effort   -> explicit saturation: MuJoCo clamps ctrl to <motor ctrlrange>, but
+#               Drake's effort_limit is advisory and unenforced on the actuation port.
+#
+# frictionloss has no MultibodyPlant equivalent and is deliberately not applied.
+TORQUE_LIMITS = np.array(JOINT_TORQUE_LIMITS_FLAT)
+
+
+def _joint_type(joint_name: str) -> str:
+    """"FL_calf_joint" -> "calf"."""
+    return joint_name.split("_")[1]
+# Command held at zero for this long so the robot settles before it must track.
+CMD_WARMUP_S = 0.5
+CMD = np.array([1.25, 0.0, 0.0])
+ONNX_POLICY_PATH = Path(__file__).parent / "logs/rsl_rl/go2_velocity/latest/model.onnx"
 
 
 class ObservationExtractor(LeafSystem):
@@ -54,17 +82,19 @@ class ObservationExtractor(LeafSystem):
         self._num_q = plant.num_positions()
 
         self.state_input = self.DeclareVectorInputPort('plant_state', plant.num_positions() + plant.num_velocities())
+        # Wired to NNPolicy's action output, which is a pure function of that system's
+        # discrete state. During NNPolicy's periodic update at time t, evaluating it
+        # returns the pre-update state -- i.e. exactly a_{t-1}, which is what mjlab's
+        # ``last_action`` term holds. Latching it into a *second* discrete state here
+        # would delay it by another control step (obs would carry a_{t-2}).
         self.action_input = self.DeclareVectorInputPort('last_action', 12)
 
-        self._prev_action_state = self.DeclareDiscreteState(12)
-        self.DeclarePeriodicDiscreteUpdateEvent(CTRL_DT, 0.0, self._latch_action)
-
+        # 42 = joint_pos 12 + joint_vel 12 + base_ang_vel 3 + gravity 3 + last_action 12.
+        # (Was 45; base linear velocity is commented out of the actor obs in mjlab_env.py
+        # because it is not reliably observable on the real Go2.)
         self.output_port = self.DeclareVectorOutputPort(
-            'obs', 45, self._calc_obs,
-            prerequisites_of_calc={self.state_input.ticket(), self.xd_ticket()})
-
-    def _latch_action(self, context: Context, discrete_state: DiscreteValues):
-        discrete_state.set_value(self._prev_action_state, self.action_input.Eval(context))
+            'obs', 42, self._calc_obs,
+            prerequisites_of_calc={self.state_input.ticket(), self.action_input.ticket()})
 
     def _calc_obs(self, context: Context, output: BasicVector):
         state = self.state_input.Eval(context)
@@ -77,17 +107,17 @@ class ObservationExtractor(LeafSystem):
         pose = self._plant.EvalBodyPoseInWorld(self._plant_context, self._base_body)
         R_inv = pose.rotation().inverse()
         spatial_vel = self._plant.EvalBodySpatialVelocityInWorld(self._plant_context, self._base_body)
-        base_lin_vel_b = R_inv @ spatial_vel.translational()
+        # base_lin_vel_b = R_inv @ spatial_vel.translational()  # not in the actor obs
         base_ang_vel_b = R_inv @ spatial_vel.rotational()
         g_proj_b = R_inv @ np.array([0.0, 0.0, -1.0])
 
-        prev_action = context.get_discrete_state(self._prev_action_state).get_value()
+        prev_action = self.action_input.Eval(context)
 
         output.SetFromVector(
             np.concatenate([
                 joint_pos,
                 joint_vel,
-                base_lin_vel_b,
+                # base_lin_vel_b,
                 base_ang_vel_b,
                 g_proj_b,
                 prev_action,
@@ -102,7 +132,7 @@ class NNPolicy(LeafSystem):
         self.input_name = self.session.get_inputs()[0].name
         self.output_name = self.session.get_outputs()[0].name
 
-        self.obs_input = self.DeclareVectorInputPort('obs', 45)
+        self.obs_input = self.DeclareVectorInputPort('obs', 42)
         self.cmd_input = self.DeclareVectorInputPort('cmd', 3)
 
         self._action_state = self.DeclareDiscreteState(12)
@@ -111,16 +141,30 @@ class NNPolicy(LeafSystem):
         self.output_port = self.DeclareVectorOutputPort('action', 12, self._calc_action, prerequisites_of_calc={self.xd_ticket()})
 
     def _update_action(self, context: Context, discrete_state: DiscreteValues):
-        obs45 = self.obs_input.Eval(context)
+        obs42 = self.obs_input.Eval(context)
         cmd = self.cmd_input.Eval(context)
 
-        obs = np.concatenate([obs45, cmd]).astype(np.float32).reshape(1, -1)
+        obs = np.concatenate([obs42, cmd]).astype(np.float32).reshape(1, -1)
 
         action = self.session.run([self.output_name], {self.input_name: obs})[0][0]
         discrete_state.set_value(self._action_state, action)
 
     def _calc_action(self, context: Context, output: BasicVector):
         output.SetFromVector(context.get_discrete_state(self._action_state).get_value())
+
+
+class CommandSource(LeafSystem):
+    """Velocity command [vx, vy, wz], held at zero for an initial settling window."""
+
+    def __init__(self, command: np.ndarray, warmup_s: float):
+        super().__init__()
+        self._command = np.asarray(command, dtype=float)
+        self._warmup_s = warmup_s
+        self.output_port = self.DeclareVectorOutputPort('cmd', 3, self._calc_cmd)
+
+    def _calc_cmd(self, context: Context, output: BasicVector):
+        active = context.get_time() >= self._warmup_s
+        output.SetFromVector(self._command if active else np.zeros(3))
 
 
 def add_floor(
@@ -169,17 +213,21 @@ def make_environment(meshcat: Meshcat) -> tuple[DiagramBuilder, MultibodyPlant, 
     parser.package_map().PopulateFromFolder(go2_description.PACKAGE_PATH)
     go2_model, = parser.AddModels(go2_description.URDF_PATH)
 
-    # Add actuators and dapming coefficients in drake
+    # Add actuators and damping coefficients in drake, from the shared table.
     tree = ET.parse(go2_description.URDF_PATH)
     for joint_elem in tree.getroot().findall("joint"):
         if joint_elem.get("type") != "revolute":
             continue
         name = joint_elem.get("name")
-        effort = float(joint_elem.find("limit").get("effort"))
-        plant.AddJointActuator(name, plant.GetJointByName(name), effort_limit=effort)
-        plant.GetJointByName(name).set_default_damping(JOINT_DAMPING)
+        group = GO2_ACTUATORS[_joint_type(name)]
+        actuator = plant.AddJointActuator(
+            name, plant.GetJointByName(name), effort_limit=group.effort_limit)
+        plant.GetJointByName(name).set_default_damping(group.damping)
+        actuator.set_default_rotor_inertia(group.armature)
 
-    floor_body, floor_model = add_floor(plant, (50, 50, 0.5), 0.7, 0.5)
+    # Wide enough that a 30 s run at ~1.3 m/s does not walk off the edge (the old
+    # 50 m floor ran out at ~19 s, which looked exactly like a late-onset fall).
+    floor_body, floor_model = add_floor(plant, (200, 200, 0.5), 0.7, 0.5)
 
     plant.set_discrete_contact_approximation(DiscreteContactApproximation.kSap)
     plant.set_contact_model(ContactModel.kHydroelasticWithFallback)
@@ -204,18 +252,22 @@ if __name__ == '__main__':
     extractor = ObservationExtractor(plant)
     builder.AddNamedSystem('obs_extractor', extractor)
 
-    cmd_source = ConstantVectorSource(np.array([1.25, 0.0, 0.0]))
+    cmd_source = CommandSource(CMD, CMD_WARMUP_S)
     builder.AddNamedSystem('cmd_source', cmd_source)
 
     action_to_torque = builder.AddNamedSystem('action_to_torque', Gain(k=ACTION_SCALE))
+    # Stand in for MuJoCo's <motor ctrlrange> clamp, which Drake does not apply.
+    torque_limit = builder.AddNamedSystem(
+        'torque_limit', Saturation(min_value=-TORQUE_LIMITS, max_value=TORQUE_LIMITS))
 
     # Connect things
     builder.Connect(plant.get_state_output_port(), extractor.state_input)
     builder.Connect(controller.output_port, extractor.action_input)
     builder.Connect(extractor.output_port, controller.obs_input)
-    builder.Connect(cmd_source.get_output_port(), controller.cmd_input)
+    builder.Connect(cmd_source.output_port, controller.cmd_input)
     builder.Connect(controller.output_port, action_to_torque.get_input_port())
-    builder.Connect(action_to_torque.get_output_port(), plant.get_actuation_input_port())
+    builder.Connect(action_to_torque.get_output_port(), torque_limit.get_input_port())
+    builder.Connect(torque_limit.get_output_port(), plant.get_actuation_input_port())
 
     diagram = builder.Build()
 
