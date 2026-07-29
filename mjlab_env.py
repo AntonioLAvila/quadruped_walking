@@ -384,7 +384,35 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     terminations=terminations,
     events=events,
     sim=SimulationCfg(
-      mujoco=MujocoCfg(timestep=0.0025, cone="elliptic", impratio=100.0),
+      mujoco=MujocoCfg(
+        timestep=0.0025,
+        cone="elliptic",
+        impratio=100.0,
+        # Constructing a fresh MujocoCfg inherits the *dataclass* defaults
+        # (iterations=100, ls_iterations=50), not the values mjlab's own velocity
+        # task uses (10/20, see mjlab/tasks/velocity/velocity_env_cfg.py).
+        #
+        # Both are caps, not fixed counts: the Newton solver exits early on
+        # `tolerance`. But mujoco_warp relaunches the solver kernel while *any*
+        # world is unconverged (wp.capture_while on nsolving, solver.py), so the
+        # whole batch pays for its slowest member. Measured per-world iteration
+        # counts at cap=100 (409,600 samples): median 6, p90 11, p99 20, max 74 --
+        # yet the per-step max over worlds averages 32, i.e. one jammed robot out
+        # of 4096 was setting the cost for all of them.
+        #
+        # 20 covers p99 of worlds. Measured at 8192 envs on flat ground:
+        # cap 100 -> 132k env-steps/s, 20 -> 179k (1.36x), 10 -> 214k (1.62x).
+        # 10 is what mjlab ships and measured statistically indistinguishable
+        # here (resting height 0.2643 vs 0.2654 m, mean contact penetration 12.51
+        # vs 12.70 mm -- ~1% and in inconsistent directions, i.e. chaos rather
+        # than solver bias); 20 trades ~25% of the speedup for headroom on the
+        # hard contact configurations ahead of a sim-to-real transfer.
+        #
+        # ls_iterations=10 measured identical to 20, so the line search is not
+        # the binding cost; 20 is kept to match mjlab.
+        iterations=20,
+        ls_iterations=20,
+      ),
       njmax=300,
       nconmax=None,
     ),
