@@ -18,7 +18,10 @@ from mjlab.rl import (
   RslRlPpoAlgorithmCfg,
 )
 
-DEFAULT_NUM_ENVS = 2**13
+# Half the flat task's 8192. This task adds a 187-ray terrain scan, two more raycast
+# sensors and heightfield terrain, and 8192 envs OOMs a 16 GB card (warp asks for a
+# single 8.6 GB allocation). Raise it if you have the VRAM.
+DEFAULT_NUM_ENVS = 2**12
 DEFAULT_NUM_IT = 6000
 DEFAULT_NUM_MINIBATCH = 8
 NUM_ROLLOUT = 50
@@ -56,6 +59,13 @@ def go2_rugged_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
       max_grad_norm=1.0,
     ),
     experiment_name="go2_rugged",
+    # Both mjlab defaults are wandb_project="mjlab" and run_name="", which would make
+    # rugged runs indistinguishable from the flat task's on the dashboard. Set here
+    # rather than passed on the CLI so it cannot be forgotten. The flat task keeps the
+    # "mjlab" project so its existing run history stays where it is.
+    wandb_project="go2-rugged",
+    run_name="rugged",
+    wandb_tags=("rugged-terrain", "pd-position", "50hz", "blind-history"),
     save_interval=100,
     num_steps_per_env=NUM_ROLLOUT,
     max_iterations=DEFAULT_NUM_IT,
