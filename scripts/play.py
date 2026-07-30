@@ -13,7 +13,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from go2.flat import env_cfg  # noqa: E402,F401  (registers the flat task on import)
+from go2.flat import env_cfg as _flat  # noqa: E402,F401  (registers the flat task)
+from go2.rugged import env_cfg as _rugged  # noqa: E402,F401  (registers the rugged task)
 from mjlab.scripts.play import main  # noqa: E402
 
 if __name__ == "__main__":
