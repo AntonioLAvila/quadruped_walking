@@ -246,7 +246,7 @@ def make_go2_velocity_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
       params={
         "sensor_name": FEET_CONTACT_SENSOR,
         "command_name": COMMAND_NAME,
-        "command_threshold": 0.01,
+        "command_threshold": 0.05,
       },
     ),
   }

@@ -325,12 +325,13 @@ def feet_air_time(
   sensor_name: str,
   command_name: str,
   command_threshold: float = 0.01,
+  target_time: float = 0.25
 ) -> torch.Tensor:
-  """sum((air_time - 0.1) * first_contact) gated by command activity."""
+  """sum((air_time - target_time) * first_contact) gated by command activity."""
   sensor = env.scene[sensor_name]
   air_time = sensor.data.current_air_time  # (B, 4)
   first_contact = sensor.compute_first_contact(dt=env.step_dt)  # (B, 4) bool
-  rew = torch.sum((air_time.clamp(max=0.5) - 0.1) * first_contact.float(), dim=1)
+  rew = torch.sum((air_time.clamp(max=0.5) - target_time) * first_contact.float(), dim=1)
   active = (_command_norm(env, command_name) > command_threshold).float()
   return rew * active
 
