@@ -5,11 +5,11 @@ observation/reward/termination/event/command/action *terms*. This module builds 
 config for the Go2 (torque control, flat terrain, asymmetric 45/120 observations) and
 registers the task so it can be trained with mjlab's CLI:
 
-    python train_go2.py Mjlab-Velocity-Flat-Unitree-Go2
+    python scripts/train.py Mjlab-Velocity-Flat-Unitree-Go2
 
-Robot constants live in ``go2_constants.py``, the mjlab scene/entity builders in
-``go2_robot.py``, and the custom MDP terms in ``go2_mdp.py``. The original
-``env.py``/``train.py``/``configs.py`` are left untouched (brax reference).
+Robot constants live in ``go2/constants.py``, the mjlab scene/entity builders in
+``go2/robot.py``, and the custom MDP terms in ``go2/mdp.py``. The rugged-terrain
+variant is a separate task under ``go2/rugged/``; this module is not shared with it.
 """
 
 from __future__ import annotations
@@ -49,8 +49,8 @@ from mjlab.terrains import TerrainEntityCfg
 from mjlab.utils.noise import UniformNoiseCfg as Unoise
 from mjlab.viewer import ViewerConfig
 
-import go2_mdp
-from go2_constants import (
+from go2 import mdp as go2_mdp
+from go2.constants import (
   BASE_BODY,
   BASE_MASS,
   DEFAULT_HEIGHT,
@@ -60,8 +60,8 @@ from go2_constants import (
   FOOT_SITES,
   GO2_ACTION_SCALE,
 )
-from go2_robot import get_feet_contact_sensor_cfg, get_go2_robot_cfg
-from go2_rl_cfg import DEFAULT_NUM_ENVS, go2_ppo_runner_cfg
+from go2.robot import get_feet_contact_sensor_cfg, get_go2_robot_cfg
+from go2.flat.rl_cfg import DEFAULT_NUM_ENVS, go2_ppo_runner_cfg
 
 TASK_ID = "Mjlab-Velocity-Flat-Unitree-Go2"
 COMMAND_NAME = "twist"

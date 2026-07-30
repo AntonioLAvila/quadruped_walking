@@ -1,4 +1,9 @@
 mjlab==1.4.0
 mujoco==3.8.1
-mujoco_mjx==3.8.1
 torch==2.12.0
+numpy
+robot_descriptions
+
+# Sim-to-sim verification only (scripts/verify_*.py); not needed to train.
+onnxruntime
+drake

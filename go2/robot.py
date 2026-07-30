@@ -14,7 +14,7 @@ from mjlab.actuator import XmlActuatorCfg
 from mjlab.entity import EntityArticulationInfoCfg, EntityCfg
 from mjlab.sensor import ContactMatch, ContactSensorCfg
 
-from go2_constants import (
+from go2.constants import (
   BASE_MASS,
   DEFAULT_HEIGHT,
   DEFAULT_JOINT_ANGLES,
@@ -153,7 +153,7 @@ def check_spec() -> mujoco.MjModel:
 
   The MJCF is no longer vendored, so an upstream Menagerie change could silently
   alter inertias or topology underneath us. These assertions turn that into a
-  loud failure. Run via ``python go2_robot.py``.
+  loud failure. Run via ``python scripts/check_robot.py``.
   """
   m = get_spec().compile()
   assert (m.nu, m.nq, m.nv) == (12, 19, 18), f"topology changed: {m.nu=} {m.nq=} {m.nv=}"
@@ -172,9 +172,3 @@ def check_spec() -> mujoco.MjModel:
       f"{jt} ctrlrange {m.actuator_ctrlrange[aid]} != +/-{group.effort_limit}"
     )
   return m
-
-
-if __name__ == "__main__":
-  m = check_spec()
-  print(f"Go2 spec OK: nu={m.nu} nq={m.nq} nv={m.nv} nbody={m.nbody} nsensor={m.nsensor}")
-  print(f"  mass={m.body_subtreemass[1]:.6f} kg  margin={m.geom_margin.max()}")

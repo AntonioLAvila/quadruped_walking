@@ -1,5 +1,17 @@
+"""Sim-to-sim check of an exported flat-task (torque) ONNX policy in Drake + meshcat.
+
+Run from the repo root: ``python scripts/verify_flat.py``. Only ``go2.constants`` is imported
+from this repo -- that module is stdlib-only on purpose, so this file runs in a pydrake
+environment that has neither mujoco nor mjlab.
+"""
+
+import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
+
+# scripts/ is not a package, so put the repo root on the path for ``go2.*``.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import numpy as np
 import onnxruntime as ort
 from pydrake.all import (
@@ -31,7 +43,7 @@ from pydrake.all import (
 )
 from robot_descriptions import go2_description
 
-from go2_constants import (
+from go2.constants import (
     CTRL_DT,
     DEFAULT_HEIGHT,
     DEFAULT_JOINT_POS,
@@ -68,7 +80,9 @@ def _joint_type(joint_name: str) -> str:
 # Command held at zero for this long so the robot settles before it must track.
 CMD_WARMUP_S = 0.5
 CMD = np.array([1.25, 0.0, 0.0])
-ONNX_POLICY_PATH = Path(__file__).parent / "logs/rsl_rl/go2_velocity/latest/model.onnx"
+ONNX_POLICY_PATH = (
+    Path(__file__).resolve().parents[1] / "logs/rsl_rl/go2_velocity/latest/model.onnx"
+)
 
 
 class ObservationExtractor(LeafSystem):

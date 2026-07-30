@@ -8,7 +8,7 @@ from mjlab.managers.command_manager import CommandTerm, CommandTermCfg
 from mjlab.managers.scene_entity_config import SceneEntityCfg
 from mjlab.utils.lab_api.string import resolve_matching_names_values
 
-from go2_constants import (
+from go2.constants import (
   BASE_BODY,
   BASE_MASS,
   DEFAULT_HEIGHT,

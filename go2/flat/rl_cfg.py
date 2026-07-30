@@ -1,8 +1,7 @@
 """rsl_rl PPO configuration for the Go2 velocity task.
 
-Cloned from mjlab's Go1 velocity ``rl_cfg.py`` and nudged toward the brax PPO setup in
-``configs.py`` (same MLP sizes, entropy, discount; observation normalization on to mirror
-``normalize_observations=True``). The actor reads the ``actor`` (45-dim) observation group
+Cloned from mjlab's Go1 velocity ``rl_cfg.py``, with observation normalization on. The
+actor reads the ``actor`` (45-dim) observation group
 and the critic reads ``critic`` (120-dim), i.e. asymmetric actor-critic.
 """
 
