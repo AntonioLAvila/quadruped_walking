@@ -49,6 +49,26 @@ COMMAND_DELAY_S = (0.0, 0.005)
 
 HISTORY_LENGTH = 5  # 5 frames @ 50 Hz = 100 ms
 
+# Per-frame actor term widths, in the order env_cfg._actor_terms() declares them.
+#
+# THE LAYOUT CONTRACT. mjlab stacks history per term and concatenates afterwards, so the
+# flat observation is TERM-MAJOR, oldest to newest:
+#     [joint_pos t-4..t | joint_vel t-4..t | ang_vel | gravity | last_action | command]
+# This is the opposite of legged_gym's time-major convention. Anything that rebuilds the
+# observation outside mjlab -- the Drake check, and eventually the robot -- must match it
+# exactly, and gets no error if it doesn't. ``scripts/check_obs_layout.py`` asserts it
+# against the live environment.
+ACTOR_TERM_WIDTHS = (
+  ("joint_pos", 12),
+  ("joint_vel", 12),
+  ("base_ang_vel", 3),
+  ("projected_gravity", 3),
+  ("last_action", 12),
+  ("command", 3),
+)
+FRAME_DIM = sum(width for _, width in ACTOR_TERM_WIDTHS)
+ACTOR_OBS_DIM = FRAME_DIM * HISTORY_LENGTH
+
 ##
 # Actuators: PD position control.
 ##
