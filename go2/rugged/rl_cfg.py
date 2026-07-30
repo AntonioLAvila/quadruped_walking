@@ -18,13 +18,16 @@ from mjlab.rl import (
   RslRlPpoAlgorithmCfg,
 )
 
+# Single source of truth: COMMAND_STAGES uses it to convert iterations to env steps.
+from go2.rugged.constants import NUM_STEPS_PER_ENV
+
 # Half the flat task's 8192. This task adds a 187-ray terrain scan, two more raycast
 # sensors and heightfield terrain, and 8192 envs OOMs a 16 GB card (warp asks for a
 # single 8.6 GB allocation). Raise it if you have the VRAM.
 DEFAULT_NUM_ENVS = 2**12
 DEFAULT_NUM_IT = 6000
 DEFAULT_NUM_MINIBATCH = 8
-NUM_ROLLOUT = 50
+NUM_ROLLOUT = NUM_STEPS_PER_ENV
 
 
 def go2_rugged_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:

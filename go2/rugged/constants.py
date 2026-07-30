@@ -107,11 +107,25 @@ JOINT_KD_FLAT = tuple(GO2_ACTUATORS[jt].kd for _ in FEET for jt in JOINT_TYPES)
 
 # Final bounds (vx m/s, vy m/s, wz rad/s). Reached via COMMAND_STAGES, not from step 0 --
 # commanding 2.5 m/s on rugged terrain before the robot can walk is an exploration wall.
+# It is also a *reward trap*: standing still banks the full `upright` + `pose` reward
+# (~2.0/step) while an unreachable velocity command makes tracking hopeless, so the policy
+# converges on standing and turning in place.
 COMMAND_BOUNDS = (2.5, 1.0, 1.5)
-COMMAND_STAGES = (
+
+# PPO rollout length. Lives here rather than in rl_cfg.py because COMMAND_STAGES needs it
+# to convert iterations to env steps; rl_cfg.py imports it back.
+NUM_STEPS_PER_ENV = 50
+
+# Stage thresholds are compared against ``env.common_step_counter``, which counts
+# **environment steps**, NOT training iterations -- it increments once per env.step().
+# Writing iteration numbers here directly makes every stage fire ~50x too early.
+_COMMAND_STAGE_ITERS = (
   (0, (1.5, 0.8, 1.2)),
   (800, (2.0, 1.0, 1.5)),
   (2000, COMMAND_BOUNDS),
+)
+COMMAND_STAGES = tuple(
+  (iteration * NUM_STEPS_PER_ENV, bounds) for iteration, bounds in _COMMAND_STAGE_ITERS
 )
 # Fraction of resamples that command a full stop. Without this the jitter scheme reaches
 # all-zero in ~0.5% of resamples, leaving `stand_still` and every command gate dead.
