@@ -89,6 +89,21 @@ FRAME_NOISE_SCALE = tuple(
   scale for name, width in ACTOR_TERM_WIDTHS for scale in (ACTOR_NOISE[name],) * width
 )
 
+# Sensor pipeline latency, sampled per env per step from [min, max].
+#
+# UNITS: **control steps**, i.e. 20 ms each at this task's 50 Hz -- NOT physics steps.
+# This differs from COMMAND_DELAY_S on the actuator side, which mjlab counts in physics
+# timesteps (5 ms each). The two delays model different things and use different clocks:
+#   observation delay = sensor -> onboard -> policy   (this one)
+#   actuator delay    = policy -> bus -> motor board  (COMMAND_DELAY_S)
+# 0-1 control steps is 0-20 ms, which brackets what a Go2 deployment stack actually sees;
+# the mechanism cannot express sub-step latency.
+#
+# Applied only to *sensed* terms -- the same set that gets noise. last_action and command
+# are known exactly and instantly: no sensor sits in either path.
+ACTOR_DELAY_STEPS = (0, 1)
+ACTOR_DELAYED_TERMS = tuple(name for name, scale in ACTOR_NOISE.items() if scale > 0.0)
+
 ##
 # Actuators: PD position control.
 ##

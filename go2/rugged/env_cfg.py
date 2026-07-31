@@ -78,6 +78,7 @@ from go2.constants import (
 from go2.rugged import mdp as rugged_mdp
 from go2.rugged import robot as rugged_robot
 from go2.rugged.constants import (
+  ACTOR_DELAY_STEPS,
   ACTOR_NOISE,
   BASE_HEIGHT_SENSOR,
   COMMAND_RESAMPLE_TIME_S,
@@ -123,7 +124,26 @@ _NOISE = {
 }
 
 
-def _actor_terms(history_length: int) -> dict[str, ObservationTermCfg]:
+def _sensed(func, name: str, history_length: int, delay: bool, **params):
+  """An actor term that comes off a real sensor: gets noise *and* pipeline latency.
+
+  mjlab's per-term pipeline is compute -> noise -> clip -> scale -> delay -> history, so
+  the delayed value is what enters the history buffer. That is the physically correct
+  order: the robot's buffer holds what its sensors reported, late and noisy, not ground
+  truth.
+  """
+  lo, hi = ACTOR_DELAY_STEPS if delay else (0, 0)
+  return ObservationTermCfg(
+    func=func,
+    noise=_NOISE[name],
+    history_length=history_length,
+    delay_min_lag=lo,
+    delay_max_lag=hi,
+    params=params or {},
+  )
+
+
+def _actor_terms(history_length: int, delay: bool = True) -> dict[str, ObservationTermCfg]:
   """The blind policy observation: 45 dims per frame, stacked ``history_length`` deep.
 
   Same six terms as the flat actor -- no height scan, and no ``base_lin_vel`` (there is no
@@ -135,21 +155,20 @@ def _actor_terms(history_length: int) -> dict[str, ObservationTermCfg]:
     [joint_pos t-4..t | joint_vel t-4..t | ang_vel | gravity | last_action | command]
   That is the opposite of legged_gym's time-major stacking, and any deployment-side
   buffer must match it exactly. ``scripts/verify_rugged.py`` asserts this.
+
+  Args:
+    delay: apply sensor latency DR. Disable for deterministic evaluation and for
+      ``scripts/check_obs_layout.py``, which tests *layout* and cannot reconstruct a
+      randomly-lagged signal from the live state.
   """
   h = history_length
   return {
-    "joint_pos": ObservationTermCfg(
-      func=joint_pos_rel, noise=_NOISE["joint_pos"], history_length=h
-    ),
-    "joint_vel": ObservationTermCfg(
-      func=joint_vel_rel, noise=_NOISE["joint_vel"], history_length=h
-    ),
-    "base_ang_vel": ObservationTermCfg(
-      func=base_ang_vel, noise=_NOISE["base_ang_vel"], history_length=h
-    ),
-    "projected_gravity": ObservationTermCfg(
-      func=projected_gravity, noise=_NOISE["projected_gravity"], history_length=h
-    ),
+    "joint_pos": _sensed(joint_pos_rel, "joint_pos", h, delay),
+    "joint_vel": _sensed(joint_vel_rel, "joint_vel", h, delay),
+    "base_ang_vel": _sensed(base_ang_vel, "base_ang_vel", h, delay),
+    "projected_gravity": _sensed(projected_gravity, "projected_gravity", h, delay),
+    # No noise and no delay: the robot knows exactly what it commanded, instantly.
+    # There is no sensor in either path.
     "last_action": ObservationTermCfg(func=last_action, history_length=h),
     "command": ObservationTermCfg(
       func=generated_commands, params={"command_name": COMMAND_NAME}, history_length=h
@@ -601,6 +620,13 @@ def make_go2_rugged_env_cfg(play: bool = False) -> ManagerBasedRlEnvCfg:
     cfg.episode_length_s = int(1e9)
     cfg.observations["actor"].enable_corruption = False
     cfg.observations["critic"].enable_corruption = False
+    # Sensor latency is DR too, but it lives on the observation terms rather than in
+    # `events`, so it is rebuilt without delay rather than popped.
+    cfg.observations["actor"].terms = _actor_terms(HISTORY_LENGTH, delay=False)
+    cfg.observations["critic"].terms = {
+      **_actor_terms(HISTORY_LENGTH, delay=False),
+      **_privileged_terms(),
+    }
     cfg.events.pop("kick", None)
     for key in _DR_EVENT_KEYS:
       cfg.events.pop(key, None)

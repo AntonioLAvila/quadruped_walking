@@ -135,6 +135,12 @@ direct-torque `<motor>`/`XmlActuator`, PD/position-actuator DR (e.g. `dr.effort_
   `TypeError` on a torque `<motor>`, which is why the flat task cannot randomize motor strength.
 - *Actuator command delay* — modelled on the actuator cfg (not as an event), so it is disabled via
   `get_go2_robot_cfg(command_delay=...)` rather than popped from `events`.
+- *Observation delay* (rugged only) — sensor→policy latency on the four **sensed** actor terms, set
+  per `ObservationTermCfg` rather than as an event, so `play` rebuilds the terms with
+  `_actor_terms(..., delay=False)` instead of popping anything. **Its unit is control steps (20 ms
+  at 50 Hz), while the actuator delay's unit is physics steps (5 ms)** — they model different links
+  in the chain and use different clocks. `last_action` and `command` get neither noise nor delay:
+  no sensor sits in either path.
 - *Kick* — `go2_mdp.Go2KickEvent` applies a real half-sine external force (the original Brax kick
   was a no-op; this is the deliberate functional version).
 

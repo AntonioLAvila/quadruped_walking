@@ -85,10 +85,13 @@ def current_frame(env: ManagerBasedRlEnv) -> np.ndarray:
 def main() -> None:
   cfg = env_cfg.make_go2_rugged_env_cfg(play=False)
   cfg.scene.num_envs = 1
-  # Noise is applied per frame *before* the frame enters the history buffer, so with
-  # corruption on there is nothing deterministic to compare against. The layout is what
-  # is under test here, not the noise model.
+  # Noise and sensor delay are both applied per frame *before* the frame enters the
+  # history buffer, so with either on there is nothing deterministic to compare against:
+  # a randomly-lagged signal cannot be reconstructed from the live state. The layout --
+  # term order, stacking direction, reset backfill -- is what is under test here, and it
+  # is independent of both.
   cfg.observations["actor"].enable_corruption = False
+  cfg.observations["actor"].terms = env_cfg._actor_terms(HISTORY_LENGTH, delay=False)
   cfg.events.pop("kick", None)
 
   env = ManagerBasedRlEnv(cfg, device="cpu")
