@@ -69,6 +69,26 @@ ACTOR_TERM_WIDTHS = (
 FRAME_DIM = sum(width for _, width in ACTOR_TERM_WIDTHS)
 ACTOR_OBS_DIM = FRAME_DIM * HISTORY_LENGTH
 
+# Per-term symmetric uniform observation noise, i.e. U(-x, +x). Single source of truth:
+# env_cfg.py wraps these in mjlab's UniformNoiseCfg, and scripts/verify_rugged.py applies
+# them directly (it cannot import mjlab). Modelling sensor noise on the *deployment* side
+# matters -- a policy that only works on clean observations is not deployable, and the
+# training-time noise is the only reason it should be robust to real encoders and IMUs.
+#
+# last_action and command are exact: the robot knows what it commanded.
+ACTOR_NOISE = {
+  "joint_pos": 0.03,
+  "joint_vel": 1.5,
+  "base_ang_vel": 0.2,
+  "projected_gravity": 0.05,
+  "last_action": 0.0,
+  "command": 0.0,
+}
+# Expanded to one scale per element of the 45-dim frame.
+FRAME_NOISE_SCALE = tuple(
+  scale for name, width in ACTOR_TERM_WIDTHS for scale in (ACTOR_NOISE[name],) * width
+)
+
 ##
 # Actuators: PD position control.
 ##

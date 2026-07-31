@@ -1,6 +1,6 @@
 """Sim-to-sim check of an exported rugged-task (PD position) ONNX policy in Drake.
 
-    python scripts/verify_rugged.py [path/to/model.onnx]
+    python scripts/verify_rugged.py [path/to/model.onnx] [--no-noise]
 
 This is a **flat-ground** check, deliberately. Putting mjlab's heightfield terrain into
 Drake is a project, not a fix, and it is not what this script exists for. What it does
@@ -60,6 +60,7 @@ from go2.rugged.constants import (  # noqa: E402
   ACTOR_OBS_DIM,
   ACTOR_TERM_WIDTHS,
   FRAME_DIM,
+  FRAME_NOISE_SCALE,
   HISTORY_LENGTH,
   JOINT_KD_FLAT,
   JOINT_KP_FLAT,
@@ -135,8 +136,20 @@ class PolicyObservation(LeafSystem):
   off-by-one that used to affect ``last_action`` in the flat verification script.
   """
 
-  def __init__(self, plant: MultibodyPlant, base_body_name: str = "base"):
+  def __init__(
+    self,
+    plant: MultibodyPlant,
+    base_body_name: str = "base",
+    noise: bool = True,
+    noise_seed: int = 0,
+  ):
     super().__init__()
+    # Sensor noise, at the same magnitudes the policy trained against. Without it this
+    # script tests the policy on perfect encoders and a perfect IMU, which is the one
+    # thing the real robot definitely does not have -- a policy that only works on clean
+    # observations would pass a noiseless check and fail on hardware.
+    self._noise_scale = np.array(FRAME_NOISE_SCALE) if noise else np.zeros(FRAME_DIM)
+    self._noise_seed = noise_seed
     self._plant = plant
     self._plant_context = plant.CreateDefaultContext()
     self._base = plant.GetBodyByName(base_body_name)
@@ -167,6 +180,22 @@ class PolicyObservation(LeafSystem):
       },
     )
 
+  def _noise(self, context: Context) -> np.ndarray:
+    """Noise for the control step containing ``context``'s time.
+
+    Deterministically seeded per control step, and that is load-bearing rather than just
+    convenient for reproducibility. ``frame()`` is called from two places at the same
+    instant -- the output port the policy reads, and the periodic update that files the
+    frame into history. mjlab noises a frame *once* and stores that exact value, so if the
+    two call sites drew independently, the history would carry different numbers than the
+    policy ever saw. Seeding on the step index makes both draws identical.
+    """
+    if not self._noise_scale.any():
+      return np.zeros(FRAME_DIM)
+    step = int(round(context.get_time() / CTRL_DT))
+    rng = np.random.default_rng(self._noise_seed + step)
+    return rng.uniform(-self._noise_scale, self._noise_scale)
+
   def frame(self, context: Context) -> np.ndarray:
     state = self.state_input.Eval(context)
     q, v = state[: self._nq], state[self._nq :]
@@ -176,7 +205,7 @@ class PolicyObservation(LeafSystem):
     r_inv = pose.rotation().inverse()
     spatial = self._plant.EvalBodySpatialVelocityInWorld(self._plant_context, self._base)
 
-    return np.concatenate(
+    clean = np.concatenate(
       [
         q[self._q_idx] - DEFAULT_JOINT_POS,
         v[self._v_idx],
@@ -185,7 +214,8 @@ class PolicyObservation(LeafSystem):
         self.action_input.Eval(context),
         self.cmd_input.Eval(context),
       ]
-    ).astype(np.float32)
+    )
+    return (clean + self._noise(context)).astype(np.float32)
 
   def _shift_history(self, context: Context, discrete_state: DiscreteValues):
     past = context.get_discrete_state(self._past).get_value().reshape(-1, FRAME_DIM)
@@ -327,15 +357,18 @@ def make_environment(meshcat: Meshcat | None):
 
 
 def main() -> None:
-  policy_path = Path(sys.argv[1]) if len(sys.argv) > 1 else default_policy_path()
+  args = [a for a in sys.argv[1:] if not a.startswith("--")]
+  noise = "--no-noise" not in sys.argv
+  policy_path = Path(args[0]) if args else default_policy_path()
   print(f"policy: {policy_path}")
+  print(f"observation noise: {'ON (training magnitudes)' if noise else 'OFF'}")
   check_metadata(policy_path)
 
   meshcat = StartMeshcat()
   builder, plant, _ = make_environment(meshcat)
 
   policy = builder.AddNamedSystem("policy", NNPolicy(policy_path))
-  observer = builder.AddNamedSystem("observer", PolicyObservation(plant))
+  observer = builder.AddNamedSystem("observer", PolicyObservation(plant, noise=noise))
   cmd = builder.AddNamedSystem("cmd", CommandSource(CMD, CMD_WARMUP_S))
   pd = builder.AddNamedSystem("pd", JointPD(plant))
 

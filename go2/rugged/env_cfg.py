@@ -78,6 +78,7 @@ from go2.constants import (
 from go2.rugged import mdp as rugged_mdp
 from go2.rugged import robot as rugged_robot
 from go2.rugged.constants import (
+  ACTOR_NOISE,
   BASE_HEIGHT_SENSOR,
   COMMAND_RESAMPLE_TIME_S,
   COMMAND_STAGES,
@@ -113,11 +114,12 @@ _DR_EVENT_KEYS = (
   "effort_limits",
 )
 
+# Built from ACTOR_NOISE so the Drake verification applies exactly the same magnitudes;
+# see the note there. Terms with scale 0 get no noise cfg at all.
 _NOISE = {
-  "joint_pos": Unoise(n_min=-0.03, n_max=0.03),
-  "joint_vel": Unoise(n_min=-1.5, n_max=1.5),
-  "base_ang_vel": Unoise(n_min=-0.2, n_max=0.2),
-  "projected_gravity": Unoise(n_min=-0.05, n_max=0.05),
+  name: Unoise(n_min=-scale, n_max=scale)
+  for name, scale in ACTOR_NOISE.items()
+  if scale > 0.0
 }
 
 
