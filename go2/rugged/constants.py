@@ -125,12 +125,26 @@ JOINT_KD_FLAT = tuple(GO2_ACTUATORS[jt].kd for _ in FEET for jt in JOINT_TYPES)
 # Velocity command envelope.
 ##
 
-# Final bounds (vx m/s, vy m/s, wz rad/s). Reached via COMMAND_STAGES, not from step 0 --
-# commanding 2.5 m/s on rugged terrain before the robot can walk is an exploration wall.
-# It is also a *reward trap*: standing still banks the full `upright` + `pose` reward
-# (~2.0/step) while an unreachable velocity command makes tracking hopeless, so the policy
-# converges on standing and turning in place.
-COMMAND_BOUNDS = (2.5, 1.0, 1.5)
+# Final bounds (vx m/s, vy m/s, wz rad/s).
+#
+# Capped at 2.0, measured -- not guessed. A 6000-iteration run at 2.5 m/s showed this is
+# the boundary of what a blind policy can do on this terrain mix:
+#
+#   ramp to 2.0 (iter 800):   tracking 1.10 -> 0.76 -> recovered to 0.98
+#                             terrain  3.6  -> 4.4   kept climbing
+#   ramp to 2.5 (iter 2000):  tracking 0.98 -> 0.71   flat for 3500 iterations
+#                             terrain  4.47 -> 4.56   stalled (+0.09 in 3500 iters)
+#                             falls    0.06 -> 0.12   doubled
+#
+# Past 2.0 the policy spends its capacity chasing a command it cannot reach instead of
+# getting better at the ground, which is the actual objective. Raising this only pays off
+# with exteroception or a longer history -- see CLAUDE.md.
+#
+# Commanding faster than the policy can go is also a *reward trap*, not merely wasteful:
+# standing still banks the full `upright` + `pose` reward (~2.0/step) while an unreachable
+# velocity makes tracking hopeless either way, so standing becomes the optimum. That is
+# exactly what happened when a units bug let the ramp complete by iteration 40.
+COMMAND_BOUNDS = (2.0, 1.0, 1.5)
 
 # PPO rollout length. Lives here rather than in rl_cfg.py because COMMAND_STAGES needs it
 # to convert iterations to env steps; rl_cfg.py imports it back.
@@ -139,10 +153,12 @@ NUM_STEPS_PER_ENV = 50
 # Stage thresholds are compared against ``env.common_step_counter``, which counts
 # **environment steps**, NOT training iterations -- it increments once per env.step().
 # Writing iteration numbers here directly makes every stage fire ~50x too early.
+#
+# Two stages, not three: 1.5 -> 2.0 was demonstrably absorbable in one step, and the third
+# stage now equals the second.
 _COMMAND_STAGE_ITERS = (
   (0, (1.5, 0.8, 1.2)),
-  (800, (2.0, 1.0, 1.5)),
-  (2000, COMMAND_BOUNDS),
+  (800, COMMAND_BOUNDS),
 )
 COMMAND_STAGES = tuple(
   (iteration * NUM_STEPS_PER_ENV, bounds) for iteration, bounds in _COMMAND_STAGE_ITERS

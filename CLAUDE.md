@@ -185,6 +185,19 @@ Two upstream bugs are worked around by subclassing in `rugged/mdp.py`: mjlab's `
 `go2_mdp.Go2KickEvent` both lack a `reset` method, so their per-env state leaks across episode resets.
 The flat task still has both.
 
+**`COMMAND_BOUNDS` is capped at 2.0 m/s for a measured reason — don't raise it casually.** A full
+6000-iteration run at 2.5 m/s established the boundary: ramping to 2.0 cost tracking 1.10 → 0.76 and
+it recovered to 0.98 while terrain kept climbing 3.6 → 4.4, but ramping to 2.5 cost 0.98 → 0.71 and it
+never recovered, with terrain flat (+0.09 over 3500 iterations) and falls doubled. Past 2.0 the policy
+spends its capacity chasing an unreachable command instead of improving on terrain. Going faster needs
+exteroception or a longer history, not a bigger number.
+
+Related trap: `command_bounds_stages` compares against `env.common_step_counter`, which counts
+**env steps, not iterations**. `_COMMAND_STAGE_ITERS` is written in iterations and converted in one
+place; writing raw iteration numbers into `COMMAND_STAGES` makes the ramp fire ~50× early, which
+collapses the policy onto standing still (standing banks the full `upright` + `pose` reward while an
+unreachable command makes tracking hopeless either way).
+
 ### Timing
 
 The two tasks run at different rates, and each owns its own constants. Keep sim timestep, decimation
