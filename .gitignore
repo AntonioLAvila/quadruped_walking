@@ -9,3 +9,4 @@ go2_test.mp4
 logs
 wandb
 MUJOCO_LOG.TXT
+.claude
