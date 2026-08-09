@@ -2,10 +2,9 @@
 __pycache__
 buh
 buh2
-go2_simulation.mp4
+*.mp4
 go2_params.pkl
 go2_params
-go2_test.mp4
 logs
 wandb
 MUJOCO_LOG.TXT

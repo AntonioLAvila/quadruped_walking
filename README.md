@@ -5,8 +5,8 @@ Sim-to-real reinforcement learning for a Unitree Go2, training velocity-tracking
 [rsl_rl](https://github.com/leggedrobotics/rsl_rl) PPO. Started as an MIT 6.7960 class project;
 originally built on Brax/MJX, since ported to mjlab.
 
-Trained policies are exported to ONNX and validated in a **separate pydrake simulation** as a
-sim-to-sim check before anything reaches hardware.
+Trained policies are exported to ONNX and validated in a separate pydrake simulation as a
+soft check.
 
 ## Layout
 
@@ -42,7 +42,10 @@ python scripts/verify_flat.py
 # Check the upstream MJCF still matches what this repo assumes.
 python scripts/check_robot.py
 ```
+*Note that the flat policy is direct torque control, and the rugged policy is joint position control
+with the loop being closed by the Go2's motor drivers.
 
 Checkpoints and the exported `model.onnx` land in `logs/rsl_rl/<experiment_name>/<run_name>/`.
 
-<video src="https://github.com/user-attachments/assets/bf309b27-882c-4e81-8b6b-6a6bd5c9bced" controls></video>
+
+https://github.com/user-attachments/assets/b08e5424-e194-40e9-b84c-480a516b7fd8
