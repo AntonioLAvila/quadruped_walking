@@ -1,9 +1,9 @@
-mjlab==1.4.0
+drake==1.53.0
+mjlab==1.6.0
 mujoco==3.8.1
+mujoco_mjx==3.8.1
+numpy==2.5.2
+onnx==1.21.0
+onnxruntime_gpu==1.26.0
+robot_descriptions==3.1.0
 torch==2.12.0
-numpy
-robot_descriptions
-
-# Sim-to-sim verification only (scripts/verify_*.py); not needed to train.
-onnxruntime
-drake
