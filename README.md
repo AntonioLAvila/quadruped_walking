@@ -17,11 +17,23 @@ go2/
   mdp.py          custom command / reward / observation / event terms
   flat/           task 1: flat ground, direct torque control, 200 Hz
   rugged/         task 2: rugged terrain, PD position control, 50 Hz
+go2_mjcf/         submodule: the robot MJCF
 scripts/          train / play / verify / check entry points
 ```
 
-The MJCF is **not vendored** — `go2.robot.get_spec()` builds it from upstream
-`robot_descriptions.go2_mj_description` and applies a short list of deltas.
+The MJCF comes from the [`go2_mjcf`](https://github.com/AntonioLAvila/go2_mjcf) submodule — a
+pinned, edited copy of Menagerie's `unitree_go2`, shared with a separate trajectory-optimization
+project so both agree on one robot. `go2.robot.get_spec()` loads it and applies two deltas from
+`GO2_ACTUATORS` (joint dynamics and effort limits). The Drake verification scripts parse the same
+file, so the sim-to-sim check compares one model against itself.
+
+## Setup
+
+```bash
+git clone --recurse-submodules git@github.com:<you>/quadruped_walking.git
+# or, in an existing checkout:
+git submodule update --init
+```
 
 ## Commands
 
@@ -39,7 +51,7 @@ python scripts/play.py Mjlab-Velocity-Flat-Unitree-Go2 \
 # Sim-to-sim verification of an exported ONNX policy in Drake + meshcat.
 python scripts/verify_flat.py
 
-# Check the upstream MJCF still matches what this repo assumes.
+# Check the submodule MJCF still matches what this repo assumes (run after any bump).
 python scripts/check_robot.py
 ```
 *Note that the flat policy is direct torque control, and the rugged policy is joint position control

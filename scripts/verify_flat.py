@@ -6,7 +6,6 @@ environment that has neither mujoco nor mjlab.
 """
 
 import sys
-import xml.etree.ElementTree as ET
 from pathlib import Path
 
 # scripts/ is not a package, so put the repo root on the path for ``go2.*``.
@@ -41,13 +40,14 @@ from pydrake.all import (
     Saturation,
     Gain,
 )
-from robot_descriptions import go2_description
+from pydrake.multibody.tree import JointActuatorIndex
 
 from go2.constants import (
     CTRL_DT,
     DEFAULT_HEIGHT,
     DEFAULT_JOINT_POS,
     GO2_ACTUATORS,
+    GO2_MJCF_PATH,
     JOINT_NAMES,
     JOINT_TORQUE_LIMITS_FLAT,
 )
@@ -223,21 +223,38 @@ def make_environment(meshcat: Meshcat) -> tuple[DiagramBuilder, MultibodyPlant, 
     scene_graph: SceneGraph
     plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=0.001)
 
+    # Same MJCF mjlab loads, so both simulators read one file. This is why that file
+    # has flattened <default> classes: Drake merges a default class with its immediate
+    # parent only, so Menagerie's depth-2 front_hip/back_hip classes silently parsed
+    # here with axis (0,0,1) instead of (0,1,0) and zero armature.
+    #
+    # Drake warns about <site>, <sensor>, <keyframe>, elliptic cone and condim=6 (it
+    # substitutes 3). All are MuJoCo-only refinements; none change the rigid-body model.
     parser = Parser(plant)
-    parser.package_map().PopulateFromFolder(go2_description.PACKAGE_PATH)
-    go2_model, = parser.AddModels(go2_description.URDF_PATH)
+    go2_model, = parser.AddModels(str(GO2_MJCF_PATH))
 
-    # Add actuators and damping coefficients in drake, from the shared table.
-    tree = ET.parse(go2_description.URDF_PATH)
-    for joint_elem in tree.getroot().findall("joint"):
-        if joint_elem.get("type") != "revolute":
-            continue
-        name = joint_elem.get("name")
+    # Unlike the old URDF path, Drake builds the 12 JointActuators itself from the
+    # <motor> elements. get_actuation_input_port() is ordered by JointActuatorIndex,
+    # and every torque vector in this file is built in JOINT_NAMES order -- assert
+    # they agree instead of trusting it. A mismatch would just permute the legs and
+    # still produce a plausible-looking gait.
+    actuator_joints = [
+        plant.get_joint_actuator(JointActuatorIndex(i)).joint().name()
+        for i in range(plant.num_actuators())
+    ]
+    assert actuator_joints == list(JOINT_NAMES), (
+        f"MJCF actuator order {actuator_joints} != JOINT_NAMES {list(JOINT_NAMES)}")
+
+    # The XML's own joint dynamics are tuned for a trajectory-optimization consumer
+    # that supplies its own actuator model (damping 0.05, no frictionloss). Override
+    # from GO2_ACTUATORS so this sim and mjlab stay on one table. Armature already
+    # matches, but set it anyway rather than depend on that.
+    for i in range(plant.num_actuators()):
+        actuator = plant.get_mutable_joint_actuator(JointActuatorIndex(i))
+        name = actuator.joint().name()
         group = GO2_ACTUATORS[_joint_type(name)]
-        actuator = plant.AddJointActuator(
-            name, plant.GetJointByName(name), effort_limit=group.effort_limit)
-        plant.GetJointByName(name).set_default_damping(group.damping)
         actuator.set_default_rotor_inertia(group.armature)
+        plant.GetJointByName(name).set_default_damping(group.damping)
 
     # Wide enough that a 30 s run at ~1.3 m/s does not walk off the edge (the old
     # 50 m floor ran out at ~19 s, which looked exactly like a late-onset fall).

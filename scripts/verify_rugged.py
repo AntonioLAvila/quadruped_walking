@@ -21,8 +21,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import xml.etree.ElementTree as ET  # noqa: E402
-
 import numpy as np  # noqa: E402
 import onnx  # noqa: E402
 import onnxruntime as ort  # noqa: E402
@@ -47,14 +45,16 @@ from pydrake.all import (  # noqa: E402
   Simulator,
   StartMeshcat,
 )
-from robot_descriptions import go2_description  # noqa: E402
+from pydrake.multibody.tree import JointActuatorIndex  # noqa: E402
 
 from go2.constants import (  # noqa: E402
   DEFAULT_HEIGHT,
   DEFAULT_JOINT_POS,
+  GO2_MJCF_PATH,
   JOINT_ARMATURE_FLAT,
   JOINT_NAMES,
   JOINT_TORQUE_LIMITS_FLAT,
+  JOINT_TYPES,
 )
 from go2.rugged.constants import (  # noqa: E402
   ACTOR_OBS_DIM,
@@ -66,6 +66,7 @@ from go2.rugged.constants import (  # noqa: E402
   JOINT_KP_FLAT,
   POSITION_ACTION_SCALE_FLAT,
   POSITION_TIMING,
+  POSITION_VISCOUS_DAMPING,
 )
 
 DEFAULT_JOINT_POS = np.array(DEFAULT_JOINT_POS)
@@ -82,9 +83,15 @@ CMD = np.array([1.0, 0.0, 0.0])
 CMD_WARMUP_S = 0.5
 PLANT_DT = 0.001
 
-# The joint the URDF calls "damping" is unrelated to the PD kd -- it is the passive
-# viscous term, matching POSITION_VISCOUS_DAMPING on the mjlab side.
-PASSIVE_DAMPING = 0.5
+# What the MJCF calls <joint damping> is unrelated to the PD kd -- it is the passive
+# viscous term. Read from POSITION_VISCOUS_DAMPING (it used to be a hard-coded 0.5,
+# which happened to agree) so the mjlab side stays the single source of truth.
+PASSIVE_DAMPING = {jt: POSITION_VISCOUS_DAMPING[jt] for jt in JOINT_TYPES}
+
+
+def _joint_type(joint_name: str) -> str:
+  """"FL_calf_joint" -> "calf"."""
+  return joint_name.split("_")[1]
 
 
 def default_policy_path() -> Path:
@@ -329,23 +336,37 @@ def make_environment(meshcat: Meshcat | None):
   scene_graph: SceneGraph
   plant, scene_graph = AddMultibodyPlantSceneGraph(builder, time_step=PLANT_DT)
 
+  # Same MJCF mjlab loads, so both simulators read one file. That file's <default>
+  # classes are flattened for exactly this parser: Drake merges a default class with
+  # its immediate parent only, so Menagerie's depth-2 front_hip/back_hip classes
+  # silently parsed here with axis (0,0,1) instead of (0,1,0) and zero armature.
+  #
+  # Drake warns about <site>, <sensor>, <keyframe>, elliptic cone and condim=6 (it
+  # substitutes 3). All are MuJoCo-only refinements; none change the rigid-body model.
   parser = Parser(plant)
-  parser.package_map().PopulateFromFolder(go2_description.PACKAGE_PATH)
-  (go2_model,) = parser.AddModels(go2_description.URDF_PATH)
+  (go2_model,) = parser.AddModels(str(GO2_MJCF_PATH))
 
-  tree = ET.parse(go2_description.URDF_PATH)
-  for joint_elem in tree.getroot().findall("joint"):
-    if joint_elem.get("type") != "revolute":
-      continue
-    name = joint_elem.get("name")
+  # Drake builds the 12 JointActuators itself from the <motor> elements, so unlike the
+  # old URDF path they are not added here. get_actuation_input_port() is ordered by
+  # JointActuatorIndex and JointPD emits torques in JOINT_NAMES order -- assert they
+  # agree. A mismatch would permute the legs and still look like a plausible gait.
+  actuator_joints = [
+    plant.get_joint_actuator(JointActuatorIndex(i)).joint().name()
+    for i in range(plant.num_actuators())
+  ]
+  assert actuator_joints == list(JOINT_NAMES), (
+    f"MJCF actuator order {actuator_joints} != JOINT_NAMES {list(JOINT_NAMES)}"
+  )
+
+  for i in range(plant.num_actuators()):
+    actuator = plant.get_mutable_joint_actuator(JointActuatorIndex(i))
+    name = actuator.joint().name()
     index = list(JOINT_NAMES).index(name)
-    actuator = plant.AddJointActuator(
-      name, plant.GetJointByName(name), effort_limit=float(TORQUE_LIMITS[index])
-    )
     # Reflected rotor inertia == MuJoCo's <joint armature> (gear ratio is 1). Without it
-    # the knee sees ~2.6x the angular acceleration for a given torque.
+    # the knee sees ~2.6x the angular acceleration for a given torque. The XML already
+    # carries these values; set them from the table anyway rather than depend on that.
     actuator.set_default_rotor_inertia(float(ARMATURE[index]))
-    plant.GetJointByName(name).set_default_damping(PASSIVE_DAMPING)
+    plant.GetJointByName(name).set_default_damping(PASSIVE_DAMPING[_joint_type(name)])
 
   add_floor(plant)
   plant.set_discrete_contact_approximation(DiscreteContactApproximation.kSap)

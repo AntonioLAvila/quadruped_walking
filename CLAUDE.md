@@ -69,9 +69,12 @@ go2/
   flat/env_cfg.py   the flat task. make_go2_velocity_env_cfg(play) + register_mjlab_task.
   flat/rl_cfg.py    its PPO cfg.
   rugged/           the rugged task, entirely self-contained (see below).
+go2_mjcf/           git submodule: the robot MJCF + meshes (see below).
 scripts/            train, play, verify_flat, verify_rugged, check_robot, check_obs_layout,
                     view_terrain. Not a package -- each puts the repo root on sys.path.
 ```
+
+A fresh clone needs `git submodule update --init`, or nothing that touches the robot will import.
 
 **Every `__init__.py` is empty, deliberately.** Task registration happens at module scope in each
 `env_cfg.py`, not in `__init__.py`, so that `import go2.constants` stays free of mujoco/mjlab. See
@@ -92,22 +95,66 @@ Drake side (`scripts/verify_*.py`, which have pydrake but *neither* mujoco nor m
 `go2/robot.py` instead. `go2/rugged/constants.py` is stdlib-only for the same reason, and every
 `__init__.py` stays empty so that importing a constants module never pulls in mjlab.
 
-**`GO2_ACTUATORS` is the single source of truth for actuator dynamics, and the MJCF is not
-vendored.** `go2.constants.GO2_ACTUATORS` holds per-joint-type `effort_limit` / `armature` /
-`damping` / `frictionloss` / `kp` / `kd`. Both simulators configure themselves *from* it, so they
-cannot drift: `go2/robot.py::_actuator_cfgs()` passes `armature`/`frictionloss`/`viscous_damping` to
-three `XmlActuatorCfg` groups (mjlab treats a non-`None` value as an override of the XML, so the
-model's own numbers never matter), and `scripts/verify_*.py` feed the same table to Drake's
-`set_default_rotor_inertia`, `set_default_damping`, and the torque `Saturation`. **Never hard-code an
-actuator parameter at a call site.** Values follow Unitree's own mjlab config
+This is why `GO2_MJCF_PATH` lives in `go2/constants.py` and is built with `pathlib` — both sides load
+the same MJCF now, and each parses it with its own parser (mujoco's on one side, Drake's on the
+other). The Drake scripts still import no mujoco.
+
+**`GO2_ACTUATORS` is the single source of truth for actuator dynamics.**
+`go2.constants.GO2_ACTUATORS` holds per-joint-type `effort_limit` / `armature` / `damping` /
+`frictionloss` / `kp` / `kd`. Both simulators configure themselves *from* it, so they cannot drift:
+`go2/robot.py::get_spec()` writes the joint dynamics and effort limits onto the spec, and
+`scripts/verify_*.py` feed the same table to Drake's `set_default_rotor_inertia`,
+`set_default_damping`, and the torque `Saturation`. **Never hard-code an actuator parameter at a call
+site.** Values follow Unitree's own mjlab config
 ([unitree_rl_mjlab](https://github.com/unitreerobotics/unitree_rl_mjlab)), not Menagerie's generic
 defaults — notably the knee armature is `0.02`, twice Menagerie's flat `0.01`.
 
-`go2.robot.get_spec()` builds the model from upstream `robot_descriptions.go2_mj_description` and
-applies exactly four deltas (margin 0, four foot sites, the `accelerometer` sensor, effort limits
-from the table). Because the model now tracks upstream, `check_spec()` asserts topology,
-total mass, geom/site/sensor names, margin, and ctrlrange — run `python scripts/check_robot.py` after any
-`robot_descriptions` bump.
+**`XmlActuatorCfg` silently ignores `armature` / `frictionloss` / `viscous_damping`.** `ActuatorCfg`
+documents all three as "None preserves the XML value", but only the PD/builtin actuator paths call
+mjlab's joint-dynamics writers; `XmlActuator.edit_spec` just wraps the existing `<motor>` (verified
+against mjlab 1.6.0). So the *flat* task's joint dynamics come from whatever `get_spec()` leaves on
+the joints — which is why `get_spec()` applies `GO2_ACTUATORS` itself in `_apply_joint_dynamics()`,
+and why `check_spec()` asserts the compiled `dof_armature`/`dof_damping`/`dof_frictionloss`. The
+values `_actuator_cfgs()` passes are documentation only. The *rugged* task's
+`BuiltinPositionActuatorCfg` really does override, so it is unaffected either way.
+
+**The MJCF lives in the `go2_mjcf` submodule** — a pinned, edited copy of Menagerie's `unitree_go2`,
+shared with a separate trajectory-optimization project. Its base is byte-identical to what
+`robot_descriptions` pulls (same topology, inertias, joint ranges; total mass 15.206408 kg). The
+edits it ships, which this repo therefore no longer applies: flattened `<default>` classes with every
+joint/motor attribute inlined, `margin` 0, `condim` 3 on non-foot collision geoms, capsule (not
+cylinder) calf geoms, all 23 collision geoms named, the four `<leg>_site` foot sites, a 30-entry
+`<sensor>` block, and `home`/`tuck` keyframes.
+
+*The flattening is load-bearing — do not "tidy" the XML back into nested `<default>` classes.* Drake
+merges a default class with its **immediate parent only**, so upstream's depth-2
+`front_hip`/`back_hip` classes silently parsed in Drake with axis `(0,0,1)` instead of `(0,1,0)` and
+zero armature — no warning, 29× error in the thigh mass matrix. `check_spec()` asserts the four thigh
+joints' axis for exactly this reason.
+
+`go2.robot.get_spec()` loads it and applies two deltas (joint dynamics, effort limits on both
+`ctrlrange` and `forcerange`) plus deleting the keyframes. `check_spec()` asserts topology, total
+mass, geom/site/sensor names, foot-site offset, margin, thigh axis, ctrl/force range and joint
+dynamics — run `python scripts/check_robot.py` after any submodule bump.
+
+**Both simulators now load this one file.** `scripts/verify_{flat,rugged}.py` used to build the Drake
+plant from `robot_descriptions`' **URDF**; they parse the same MJCF instead, so sim-to-sim compares
+one model against itself rather than two descriptions that happen to agree. `robot_descriptions` is
+gone from `requirements.txt` — nothing imports it any more. Consequences worth knowing:
+
+- Drake creates the 12 `JointActuator`s itself from the `<motor>` elements, so neither script adds
+  them by hand. The actuation input port is ordered by `JointActuatorIndex`, which follows XML
+  order; both scripts **assert** that equals `JOINT_NAMES` order, because a mismatch would just
+  permute the legs and still produce a plausible-looking gait.
+- Drake reads `armature` (already matching `GO2_ACTUATORS`) and `damping` (0.05, which does **not**
+  match) off the XML. Both scripts override from the table, as before.
+- Effort limits come from `<motor forcerange>` = the datasheet peaks 23.7/45.43, not the table's
+  derated 23.5/45.0. Harmless: Drake's `effort_limit` is advisory on the actuation port, and both
+  scripts already clamp explicitly from the table.
+- Drake warns about `<site>`, `<sensor>`, `<keyframe>`, elliptic cone, and `condim=6` (it substitutes
+  3). All expected — MuJoCo-only refinements that don't change the rigid-body model.
+- Collision geometry improved: the URDF gave Drake unnamed shapes at its default µ=1.0, the MJCF
+  gives 23 named geoms at µ=0.6 body / 0.8 feet, matching MuJoCo.
 
 **Asymmetric actor/critic observations (flat task: 45 vs 120).** The actor group is 45-dim and **blind**
 (joint pos/vel, base *angular* vel, projected gravity, last action, command) — that is the only
@@ -154,13 +201,18 @@ two are mutually exclusive).
 `go2/rugged/` is a **PD position-control, 50 Hz** task on generated terrain. Beyond the config, four
 things are worth knowing before touching it.
 
-**`rugged/robot.get_spec()` adds two deltas on top of `go2.robot.get_spec()`, and both are load-bearing.**
-It names the 19 anonymous group-3 collision geoms (upstream names only the four feet, so contact
-sensors cannot otherwise address the thighs/shanks/trunk — and matching by *body* is not a workaround,
-since the foot geom is a child of the calf body). And it **deletes the `<actuator>` block**:
-`BuiltinPositionActuatorCfg` *adds* `<position>` elements without removing Menagerie's 12 `<motor>`s,
-which would give `nu=24`, a bogus keyframe torque bias on the orphans, and a corrupted joint→ctrl map
-in mjlab's ONNX metadata exporter.
+**`rugged/robot.get_spec()` adds one delta on top of `go2.robot.get_spec()`: it deletes the
+`<actuator>` block.** `BuiltinPositionActuatorCfg` *adds* `<position>` elements without removing the
+MJCF's 12 `<motor>`s, which would give `nu=24`, a bogus keyframe torque bias on the orphans, and a
+corrupted joint→ctrl map in mjlab's ONNX metadata exporter.
+
+It used to add a second delta — naming the 19 anonymous group-3 collision geoms, since upstream
+Menagerie names only the four feet and contact sensors cannot otherwise address the thighs/shanks/
+trunk. `go2_mjcf` names all 23 itself, with **different names** than that pass generated, so the pass
+is gone and `TRUNK_/THIGH_/SHANK_COLLISION_GEOMS` in `rugged/robot.py` carry the XML's names
+(`torso_box`/`head_cyl`/`head_sphere`, `<leg>_thigh_col`, `<leg>_calf_upper`/`_lower`). Same counts,
+same geometry. Matching by *body* is still not a workaround: the foot geom is a child of the calf
+body, so a calf-body match fires on every footstep.
 
 **The actor is blind; terrain scans are critic-only.** `terrain_scan` (187 rays), `foot_height_scan`
 and `base_height_scan` feed the critic and the reward terms, never the policy. That is what makes the
