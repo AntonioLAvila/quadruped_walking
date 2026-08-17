@@ -12,14 +12,21 @@ live in ``go2_robot.py``, which imports the constants defined here.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 ##
 # Model topology.
 #
-# The MJCF is *not* vendored in this repo: ``go2_robot.py`` builds it from the
-# upstream MuJoCo Menagerie model and applies a short list of deltas. Only pure
-# data lives here.
+# The MJCF lives in the ``go2_mjcf`` submodule -- a pinned, edited copy of the
+# Menagerie ``unitree_go2`` model, shared with a separate trajectory-optimization
+# project so both agree on one robot. ``go2/robot.py`` loads it and applies a short
+# list of deltas. Only pure data lives here.
 ##
+
+# Path to the submodule's MJCF, resolved from this file so it works regardless of
+# the working directory. ``pathlib`` is stdlib, so the firewall (see module
+# docstring) holds.
+GO2_MJCF_PATH = Path(__file__).resolve().parents[1] / "go2_mjcf" / "go2.xml"
 
 # Foot collision geoms / sites / base body, as named in the Menagerie Go2 model.
 FEET = ("FL", "FR", "RL", "RR")
@@ -28,6 +35,8 @@ FOOT_SITES = tuple(f"{f}_site" for f in FEET)
 BASE_BODY = "base"
 
 # Foot site offset within its parent ``<leg>_calf`` body (the foot sphere centre).
+# The sites now ship in the MJCF; this stays as the documented offset and as the
+# value ``check_spec()`` asserts the XML still uses.
 FOOT_SITE_POS = (0.0, 0.0, -0.213)
 
 # Default standing height (home keyframe qpos z) and base subtree mass.
@@ -63,10 +72,17 @@ JOINT_REGEX = {jt: f".*_{jt}_joint" for jt in JOINT_TYPES}
 # Actuators: the single source of truth for per-joint actuator dynamics.
 #
 # Both simulators configure themselves from this table, so they cannot drift
-# apart: ``go2_robot.py`` overrides the MJCF at spec-build time (mjlab's
-# ``ActuatorCfg`` fields take precedence over the XML), and ``verification.py``
-# feeds the same numbers to Drake's reflected inertia, joint damping and torque
-# saturation. Never hard-code any of these at a call site.
+# apart: ``go2/robot.py::get_spec()`` writes these onto the MJCF's joints at
+# spec-build time, and ``scripts/verify_*.py`` feed the same numbers to Drake's
+# reflected inertia, joint damping and torque saturation. Never hard-code any of
+# these at a call site.
+#
+# Note it is ``get_spec()`` that applies them, not mjlab. ``XmlActuatorCfg``
+# accepts ``armature``/``frictionloss``/``viscous_damping`` but silently ignores
+# them (verified against mjlab 1.6.0: only the PD/builtin actuator paths call
+# ``utils.spec``'s joint-dynamics writers). The rugged task's
+# ``BuiltinPositionActuatorCfg`` really does override; the flat task's does not,
+# so the flat task would otherwise inherit whatever the XML happens to ship.
 #
 # Values follow Unitree's own mjlab RL config (unitree_rl_mjlab,
 # ``src/assets/robots/unitree_go2/go2_constants.py``) rather than Menagerie's

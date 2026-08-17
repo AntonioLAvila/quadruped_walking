@@ -1,10 +1,11 @@
-"""Sanity-check the (upstream) Go2 MJCF still matches what this repo assumes.
+"""Sanity-check the Go2 MJCF still matches what this repo assumes.
 
-The MJCF is not vendored -- ``go2.robot.get_spec()`` builds it from
-``robot_descriptions.go2_mj_description`` -- so an upstream Menagerie bump can silently
-change inertias or topology. Run this after any such bump:
+``go2.robot.get_spec()`` loads the ``go2_mjcf`` submodule, which pins the model by SHA --
+but that model is shared with a separate trajectory-optimization project, so a bump made
+for that project can still change inertias, topology, geom names or joint dynamics here.
+Run this after any submodule bump:
 
-    python scripts/check_robot.py
+    git submodule update --remote go2_mjcf && python scripts/check_robot.py
 """
 
 import sys

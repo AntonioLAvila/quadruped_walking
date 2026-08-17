@@ -1,7 +1,7 @@
 """Robot spec, PD actuators and terrain sensors for the rugged-terrain task.
 
 Wraps ``go2.robot`` rather than duplicating it: ``get_spec()`` below calls
-``go2.robot.get_spec()`` and applies two further deltas. Nothing in ``go2/`` is modified,
+``go2.robot.get_spec()`` and applies one further delta. Nothing in ``go2/`` is modified,
 so the flat task cannot regress.
 """
 
@@ -35,35 +35,43 @@ from go2.rugged.constants import (
   TRUNK_CONTACT_SENSOR,
 )
 
-# MuJoCo geom group used by the Menagerie Go2 for collision geometry.
-COLLISION_GEOM_GROUP = 3
+##
+# Non-foot collision geom names, as the ``go2_mjcf`` MJCF names them.
+#
+# These used to be generated here: upstream Menagerie names only the four foot spheres,
+# so this file walked the spec and named the other 19 group-3 geoms
+# ``<body>_collision<i>``. ``go2_mjcf`` names all 23 itself, and its names are *not* the
+# generated ones -- so the naming pass is gone and the sensor patterns below point at the
+# XML's names instead. The counts are unchanged (3 trunk, 1 per thigh, 2 per calf), so
+# the sensors see exactly the same geometry as before.
+#
+# Matching by *body* is still not a workaround for any of these: the foot geom is a child
+# of the calf body, so a calf-body match would fire on every footstep.
+##
+
+TRUNK_COLLISION_GEOMS = ("torso_box", "head_cyl", "head_sphere")
+THIGH_COLLISION_GEOMS = tuple(f"{leg}_thigh_col" for leg in FEET)
+SHANK_COLLISION_GEOMS = tuple(
+  f"{leg}_calf_{part}" for leg in FEET for part in ("upper", "lower")
+)
 
 
 def get_spec() -> mujoco.MjSpec:
-  """Flat-task spec plus the two deltas PD control and body-contact sensing need.
+  """Flat-task spec plus the one delta PD control needs.
 
-  1. **Name the collision geoms.** Upstream names only the four foot spheres; the other
-     19 group-3 geoms are anonymous, so ``ContactMatch(mode="geom", ...)`` cannot address
-     the thighs, shanks or trunk. Matching by *body* is not a workaround -- the foot geom
-     is a child of the calf body, so a calf-body match fires on every footstep.
+  **Delete the ``<actuator>`` block.** ``BuiltinPositionActuatorCfg`` *adds*
+  ``<position>`` elements and does not remove the 12 ``<motor>`` elements the MJCF
+  ships. Leaving them yields nu=24: ``Entity._add_initial_state_keyframe`` writes
+  ctrl for every actuator in the spec, so the orphaned motors would apply a constant
+  torque equal to the default joint angle, and mjlab's ONNX metadata exporter keys its
+  joint->ctrl map on the actuator target, so it would silently record the wrong element.
+  (mjlab's own go1.xml ships no ``<actuator>`` block at all, which is why this never
+  bites the reference task.)
 
-  2. **Delete the ``<actuator>`` block.** ``BuiltinPositionActuatorCfg`` *adds*
-     ``<position>`` elements and does not remove the 12 ``<motor>`` elements the Menagerie
-     XML ships. Leaving them yields nu=24: ``Entity._add_initial_state_keyframe`` writes
-     ctrl for every actuator in the spec, so the orphaned motors would apply a constant
-     torque equal to the default joint angle, and mjlab's ONNX metadata exporter keys its
-     joint->ctrl map on the actuator target, so it would silently record the wrong element.
-     (mjlab's own go1.xml ships no ``<actuator>`` block at all, which is why this never
-     bites the reference task.)
+  The collision-geom naming pass that used to live here is gone; see the geom-name
+  constants above.
   """
   spec = flat_robot.get_spec()
-
-  for body in spec.bodies:
-    index = 0
-    for geom in body.geoms:
-      if geom.group == COLLISION_GEOM_GROUP and not geom.name:
-        geom.name = f"{body.name}_collision{index}"
-        index += 1
 
   for actuator in list(spec.actuators):
     spec.delete(actuator)
@@ -197,16 +205,9 @@ def get_body_contact_sensor_cfgs() -> tuple[ContactSensorCfg, ...]:
   contact) is tuned for a tamer terrain mix. Only the trunk terminates.
   """
   return (
-    _body_contact_sensor_cfg(
-      THIGH_CONTACT_SENSOR, tuple(f"{leg}_thigh_collision0" for leg in FEET)
-    ),
-    _body_contact_sensor_cfg(
-      SHANK_CONTACT_SENSOR,
-      tuple(f"{leg}_calf_collision{i}" for leg in FEET for i in (0, 1)),
-    ),
-    _body_contact_sensor_cfg(
-      TRUNK_CONTACT_SENSOR, tuple(f"base_collision{i}" for i in range(3))
-    ),
+    _body_contact_sensor_cfg(THIGH_CONTACT_SENSOR, THIGH_COLLISION_GEOMS),
+    _body_contact_sensor_cfg(SHANK_CONTACT_SENSOR, SHANK_COLLISION_GEOMS),
+    _body_contact_sensor_cfg(TRUNK_CONTACT_SENSOR, TRUNK_COLLISION_GEOMS),
   )
 
 
@@ -249,6 +250,6 @@ def check_spec() -> mujoco.MjModel:
   for sensor_cfg in get_body_contact_sensor_cfgs():
     for geom_name in sensor_cfg.primary.pattern:
       assert mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_GEOM, geom_name) >= 0, (
-        f"collision geom {geom_name} not found -- geom naming delta failed"
+        f"collision geom {geom_name} not found -- has go2_mjcf renamed its geoms?"
       )
   return m
