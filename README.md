@@ -29,11 +29,18 @@ file, so the sim-to-sim check compares one model against itself.
 
 ## Setup
 
+Dependencies are managed with [uv](https://docs.astral.sh/uv/); `pyproject.toml` + `uv.lock` pin the
+whole environment, Python included.
+
 ```bash
 git clone --recurse-submodules git@github.com:<you>/quadruped_walking.git
 # or, in an existing checkout:
 git submodule update --init
+
+uv sync    # creates .venv/ from the lockfile (downloads CUDA torch -- several GB the first time)
 ```
+
+There is no need to activate the venv: `uv run` uses it, and re-syncs it if the lockfile moved.
 
 ## Commands
 
@@ -41,18 +48,18 @@ Run from the repo root; mjlab resolves `logs/` relative to the working directory
 
 ```bash
 # Train (defaults live in each task's rl_cfg.py). Needs CUDA in practice.
-python scripts/train.py Mjlab-Velocity-Flat-Unitree-Go2
-python scripts/train.py Mjlab-Velocity-Rugged-Unitree-Go2 --env.scene.num-envs 4096
+uv run scripts/train.py Mjlab-Velocity-Flat-Unitree-Go2
+uv run scripts/train.py Mjlab-Velocity-Rugged-Unitree-Go2 --env.scene.num-envs 4096
 
 # Evaluate a checkpoint in the mjlab viewer.
-python scripts/play.py Mjlab-Velocity-Flat-Unitree-Go2 \
+uv run scripts/play.py Mjlab-Velocity-Flat-Unitree-Go2 \
     --agent trained --checkpoint-file logs/rsl_rl/go2_velocity/latest/model_999.pt --num-envs 1
 
 # Sim-to-sim verification of an exported ONNX policy in Drake + meshcat.
-python scripts/verify_flat.py
+uv run scripts/verify_flat.py
 
 # Check the submodule MJCF still matches what this repo assumes (run after any bump).
-python scripts/check_robot.py
+uv run scripts/check_robot.py
 ```
 *Note that the flat policy is direct torque control, and the rugged policy is joint position control
 with the loop being closed by the Go2's motor drivers.

@@ -84,7 +84,10 @@ class Go2VelocityCommand(CommandTerm):
     self._command[env_ids] = torch.where(fresh, y, x_jitter)
     self._fresh[env_ids] = False
 
-  def _update_command(self) -> None:
+  def _update_command(self, env_ids: torch.Tensor | None) -> None:
+    # Nothing to advance per step: the command is piecewise-constant between resamples,
+    # so there is no per-env state to scope to ``env_ids``. mjlab >=1.6 requires the
+    # parameter to exist (CommandTerm._check_update_command_signature).
     pass
 
   def _update_metrics(self) -> None:

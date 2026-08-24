@@ -9,3 +9,4 @@ logs
 wandb
 MUJOCO_LOG.TXT
 .claude
+.venv

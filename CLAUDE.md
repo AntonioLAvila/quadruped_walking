@@ -22,32 +22,52 @@ task's config imports the other's:
 
 ## Commands
 
+**The environment is uv-managed.** `pyproject.toml` + `uv.lock` pin every dependency and
+`.python-version` pins CPython 3.12; there is no `requirements.txt` and no venv to activate.
+`uv run` syncs `.venv/` from the lockfile before each command, so it is the only supported way to
+invoke anything here — a bare `python scripts/...` will not find `mjlab`. Use `uv add` / `uv remove`
+to change dependencies (never `pip install`, which `uv run` would revert on the next sync), and
+`uv sync` after pulling a lockfile change.
+
+**mjlab, mujoco and mujoco-warp move in lockstep — bump them together or not at all.** mjlab pins
+its siblings tightly (1.6.0 requires `mujoco~=3.11.0` *and* `mujoco-warp~=3.11.0`), while
+`warp-lang` is declared unbounded as `>=1.14.0` by both and is *not* actually version-agnostic:
+warp-lang 1.16.0 against mujoco-warp **3.8.1** fails to codegen the kernels
+(`Referencing undefined symbol: xmat`, out of `mujoco_warp/_src/sensor.py::_frame_axis`). It pairs
+fine with mujoco-warp 3.11.0, which is what the lockfile holds. The failure mode is worth
+remembering because it is invisible to the cheap check: `check_robot.py` only builds specs and still
+passes, while `check_obs_layout.py` instantiates an env and dies. **Run both after any bump.**
+
+mjlab also breaks API across minors. 1.6.0 changed `CommandTerm._update_command` from `(self)` to
+`(self, env_ids)`; `Go2VelocityCommand` in `go2/mdp.py` carries the new signature and mjlab raises a
+`TypeError` at env construction for the old one.
+
 Run from the repo root — mjlab resolves `logs/` relative to the working directory.
 
 ```bash
 # Train. Defaults live in each task's rl_cfg.py. Needs CUDA in practice.
-python scripts/train.py Mjlab-Velocity-Flat-Unitree-Go2
-python scripts/train.py Mjlab-Velocity-Rugged-Unitree-Go2 --env.scene.num-envs 4096 \
+uv run scripts/train.py Mjlab-Velocity-Flat-Unitree-Go2
+uv run scripts/train.py Mjlab-Velocity-Rugged-Unitree-Go2 --env.scene.num-envs 4096 \
     --agent.max-iterations 10000 --agent.run-name my_run
 
 # Play / evaluate a checkpoint in the mjlab viewer.
-python scripts/play.py Mjlab-Velocity-Rugged-Unitree-Go2 \
+uv run scripts/play.py Mjlab-Velocity-Rugged-Unitree-Go2 \
     --agent trained --checkpoint-file logs/rsl_rl/go2_rugged/latest/model_999.pt --num-envs 1
 
 # Sim-to-sim verification of an exported ONNX policy in Drake + meshcat (flat ground only).
-python scripts/verify_flat.py
-python scripts/verify_rugged.py [path/to/model.onnx]
+uv run scripts/verify_flat.py
+uv run scripts/verify_rugged.py [path/to/model.onnx]
 
 # Sanity-check the (upstream) robot MJCF still matches what this repo assumes. Asserts
 # topology/mass/names/margin/ctrlrange for both control modes.
-python scripts/check_robot.py
+uv run scripts/check_robot.py
 
 # Assert the rugged actor observation is packed the way the deployment code assumes.
 # Run this before trusting scripts/verify_rugged.py or any hardware port.
-python scripts/check_obs_layout.py
+uv run scripts/check_obs_layout.py
 
 # Generate the rugged terrain, print its cost, optionally open the viewer.
-python scripts/view_terrain.py [--view] [--play]
+uv run scripts/view_terrain.py [--view] [--play]
 ```
 
 There is no test suite, linter, or build step; the `scripts/check_*.py` files are the closest thing.
@@ -74,7 +94,8 @@ scripts/            train, play, verify_flat, verify_rugged, check_robot, check_
                     view_terrain. Not a package -- each puts the repo root on sys.path.
 ```
 
-A fresh clone needs `git submodule update --init`, or nothing that touches the robot will import.
+A fresh clone needs `git submodule update --init` (and `uv sync`), or nothing that touches the
+robot will import.
 
 **Every `__init__.py` is empty, deliberately.** Task registration happens at module scope in each
 `env_cfg.py`, not in `__init__.py`, so that `import go2.constants` stays free of mujoco/mjlab. See
@@ -135,12 +156,12 @@ joints' axis for exactly this reason.
 `go2.robot.get_spec()` loads it and applies two deltas (joint dynamics, effort limits on both
 `ctrlrange` and `forcerange`) plus deleting the keyframes. `check_spec()` asserts topology, total
 mass, geom/site/sensor names, foot-site offset, margin, thigh axis, ctrl/force range and joint
-dynamics — run `python scripts/check_robot.py` after any submodule bump.
+dynamics — run `uv run scripts/check_robot.py` after any submodule bump.
 
 **Both simulators now load this one file.** `scripts/verify_{flat,rugged}.py` used to build the Drake
 plant from `robot_descriptions`' **URDF**; they parse the same MJCF instead, so sim-to-sim compares
 one model against itself rather than two descriptions that happen to agree. `robot_descriptions` is
-gone from `requirements.txt` — nothing imports it any more. Consequences worth knowing:
+gone from the dependency list — nothing imports it any more. Consequences worth knowing:
 
 - Drake creates the 12 `JointActuator`s itself from the `<motor>` elements, so neither script adds
   them by hand. The actuation input port is ordered by `JointActuatorIndex`, which follows XML
