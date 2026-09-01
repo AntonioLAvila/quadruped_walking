@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Wrapper around `uv run` that fixes a torch CUDA quirk: torch.linalg.det
+# (used by mjlab's domain-randomization events) dlopen's
+# libtorch_cuda_linalg.so by bare filename and relies on LD_LIBRARY_PATH to
+# find it, ignoring torch/lib's own rpath. If LD_LIBRARY_PATH is already set
+# to something else (e.g. a sourced ROS environment) and doesn't contain
+# torch/lib, that dlopen fails with "cannot open shared object file" even
+# though the .so is right there in site-packages.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+torch_lib="$(uv run python -c 'import torch, os; print(os.path.dirname(torch.__file__))')/lib"
+
+export LD_LIBRARY_PATH="${torch_lib}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+
+exec uv run "$@"
