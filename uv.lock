@@ -3,8 +3,8 @@ revision = 3
 requires-python = ">=3.12, <3.14"
 resolution-markers = [
     "python_full_version >= '3.13' and platform_machine != 's390x'",
-    "python_full_version < '3.13' and platform_machine != 's390x'",
     "python_full_version >= '3.13' and platform_machine == 's390x'",
+    "python_full_version < '3.13' and platform_machine != 's390x'",
     "python_full_version < '3.13' and platform_machine == 's390x'",
 ]
 
@@ -1714,6 +1714,7 @@ dependencies = [
     { name = "onnx" },
     { name = "onnxruntime-gpu" },
     { name = "torch" },
+    { name = "wandb" },
 ]
 
 [package.metadata]
@@ -1725,6 +1726,7 @@ requires-dist = [
     { name = "onnx", specifier = "==1.21.0" },
     { name = "onnxruntime-gpu", specifier = "==1.26.0" },
     { name = "torch", specifier = "==2.12.0" },
+    { name = "wandb", specifier = "==0.28.2" },
 ]
 
 [[package]]

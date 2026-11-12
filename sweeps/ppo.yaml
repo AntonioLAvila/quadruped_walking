@@ -1,0 +1,66 @@
+# PPO hyperparameter sweep for the rugged task. From the repo root:
+#   uv run wandb sweep sweeps/ppo.yaml
+#   uv run wandb agent <sweep id printed above>
+#
+# The values in go2/rugged/rl_cfg.py came from this sweep run on gait-switching's FLAT task,
+# so they have never been tuned against terrain. This is the same search, retargeted.
+#
+# Deliberately left out:
+#   learning_rate      The adaptive schedule retunes it from the KL, so desired_kl is the knob.
+#   num_steps_per_env  go2/rugged/constants.py converts the command ramp using its default,
+#                      so changing it here would silently shift the ramp.
+#   reward weights     They change the scale of the metric, so runs stop being comparable.
+#
+# Train/mean_reward is the reward of the *stochastic* rollout, so a low entropy_coef raises
+# it partly by shrinking action noise rather than by walking better. Cross-check the winner
+# with scripts/eval_rugged.py before adopting it.
+
+program: scripts/train.py
+project: go2-rugged
+method: bayes
+run_cap: 15
+metric:
+  name: Train/mean_reward
+  goal: maximize
+
+command:
+  - uv
+  - run
+  - ${program}
+  - Mjlab-Velocity-Rugged-Unitree-Go2
+  - ${args}
+
+parameters:
+  # Fixed. The sprint ramp only reaches 3.0 m/s by iteration 2000, so 3000 iterations
+  # compares runs at cruise plus a moderate sprint, not at the top of the ladder.
+  agent.max_iterations:
+    value: 3000
+  agent.save_interval:
+    value: 1000
+  agent.upload_model:
+    value: false
+
+  agent.algorithm.desired_kl:
+    distribution: log_uniform_values
+    min: 0.005
+    max: 0.02
+  agent.algorithm.entropy_coef:
+    distribution: log_uniform_values
+    min: 0.001
+    max: 0.02
+  agent.algorithm.gamma:
+    distribution: uniform
+    min: 0.98
+    max: 0.995
+  agent.algorithm.lam:
+    distribution: uniform
+    min: 0.9
+    max: 0.98
+  agent.algorithm.clip_param:
+    distribution: uniform
+    min: 0.1
+    max: 0.3
+  agent.algorithm.num_learning_epochs:
+    values: [4, 6, 8]
+  agent.algorithm.num_mini_batches:
+    values: [4, 8, 16]
