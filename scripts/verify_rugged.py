@@ -1,6 +1,9 @@
 """Sim-to-sim check of an exported rugged-task (PD position) ONNX policy in Drake.
 
-    python scripts/verify_rugged.py [path/to/model.onnx] [--no-noise]
+    uv run scripts/verify_rugged.py [path/to/model.onnx] [--cmd VX VY WZ] [--no-noise]
+
+``--cmd 3.5 0 0`` checks the sprint gait: the floor here is a flat plane, which is exactly
+what a sprint lane is.
 
 This is a **flat-ground** check, deliberately. Putting mjlab's heightfield terrain into
 Drake is a project, not a fix, and it is not what this script exists for. What it does
@@ -16,6 +19,7 @@ scale, PD gains, default pose, observation term names), so this file cannot drif
 the trained policy.
 """
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -79,7 +83,7 @@ CTRL_DT = POSITION_TIMING.ctrl_dt
 
 OBS_DIM = ACTOR_OBS_DIM
 TERM_WIDTHS = ACTOR_TERM_WIDTHS
-CMD = np.array([1.0, 0.0, 0.0])
+DEFAULT_CMD = (1.0, 0.0, 0.0)
 CMD_WARMUP_S = 0.5
 PLANT_DT = 0.001
 
@@ -378,10 +382,22 @@ def make_environment(meshcat: Meshcat | None):
 
 
 def main() -> None:
-  args = [a for a in sys.argv[1:] if not a.startswith("--")]
-  noise = "--no-noise" not in sys.argv
-  policy_path = Path(args[0]) if args else default_policy_path()
+  parser = argparse.ArgumentParser(description="Drake sim-to-sim check of a rugged policy.")
+  parser.add_argument("policy", nargs="?", type=Path, help="ONNX file (default: latest run)")
+  parser.add_argument(
+    "--cmd",
+    nargs=3,
+    type=float,
+    default=DEFAULT_CMD,
+    metavar=("VX", "VY", "WZ"),
+    help="velocity command in m/s, m/s, rad/s",
+  )
+  parser.add_argument("--no-noise", action="store_true", help="clean observations")
+  args = parser.parse_args()
+  noise = not args.no_noise
+  policy_path = args.policy or default_policy_path()
   print(f"policy: {policy_path}")
+  print(f"command: vx={args.cmd[0]} vy={args.cmd[1]} wz={args.cmd[2]}")
   print(f"observation noise: {'ON (training magnitudes)' if noise else 'OFF'}")
   check_metadata(policy_path)
 
@@ -390,7 +406,7 @@ def main() -> None:
 
   policy = builder.AddNamedSystem("policy", NNPolicy(policy_path))
   observer = builder.AddNamedSystem("observer", PolicyObservation(plant, noise=noise))
-  cmd = builder.AddNamedSystem("cmd", CommandSource(CMD, CMD_WARMUP_S))
+  cmd = builder.AddNamedSystem("cmd", CommandSource(np.array(args.cmd), CMD_WARMUP_S))
   pd = builder.AddNamedSystem("pd", JointPD(plant))
 
   builder.Connect(plant.get_state_output_port(), observer.state_input)

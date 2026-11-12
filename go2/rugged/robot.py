@@ -24,14 +24,12 @@ from mjlab.sensor import (
 from go2 import robot as flat_robot
 from go2.constants import BASE_MASS, FEET, FOOT_GEOMS, GO2_ACTUATORS, JOINT_REGEX
 from go2.rugged.constants import (
-  BASE_HEIGHT_SENSOR,
   COMMAND_DELAY_S,
   FOOT_HEIGHT_SENSOR,
+  LEG_CONTACT_SENSOR,
   POSITION_TIMING,
   POSITION_VISCOUS_DAMPING,
-  SHANK_CONTACT_SENSOR,
   TERRAIN_SCAN_SENSOR,
-  THIGH_CONTACT_SENSOR,
   TRUNK_CONTACT_SENSOR,
 )
 
@@ -50,8 +48,9 @@ from go2.rugged.constants import (
 ##
 
 TRUNK_COLLISION_GEOMS = ("torso_box", "head_cyl", "head_sphere")
-THIGH_COLLISION_GEOMS = tuple(f"{leg}_thigh_col" for leg in FEET)
-SHANK_COLLISION_GEOMS = tuple(
+# Thighs and shanks together: one sensor, one penalty. They were separate sensors with
+# identical weights, which bought two extra log lines and nothing else.
+LEG_COLLISION_GEOMS = tuple(f"{leg}_thigh_col" for leg in FEET) + tuple(
   f"{leg}_calf_{part}" for leg in FEET for part in ("upper", "lower")
 )
 
@@ -123,14 +122,9 @@ def get_go2_robot_cfg(command_delay: bool = True) -> EntityCfg:
 # ``include_geom_groups=(0,)`` restricts rays to the terrain: the generator's geoms take
 # MuJoCo's default group 0, while the robot's collision geoms are group 3, visuals group 2
 # and the foot sites group 4.
+#
+# The feet contact sensor is ``go2.robot.get_feet_contact_sensor_cfg()``, unchanged.
 ##
-
-
-def get_feet_contact_sensor_cfg() -> ContactSensorCfg:
-  """The flat task's foot contact sensor, plus per-substep force history."""
-  cfg = flat_robot.get_feet_contact_sensor_cfg()
-  cfg.history_length = POSITION_TIMING.decimation
-  return cfg
 
 
 def get_terrain_scan_sensor_cfg() -> RayCastSensorCfg:
@@ -154,8 +148,7 @@ def get_foot_height_sensor_cfg() -> TerrainHeightSensorCfg:
 
   ``reduction="min"`` takes the closest ground point under each foot. Note the foot site
   sits at the foot sphere's *centre* (radius 0.022), so a foot resting on flat ground reads
-  ~0.022 -- numerically the same as the world z the flat task's foot rewards use, which is
-  why ``FEET_MAX_HEIGHT`` carries over unchanged.
+  ~0.022, not 0 -- ``env_cfg.FOOT_CLEARANCE_TARGET`` is measured from the same point.
   """
   return TerrainHeightSensorCfg(
     name=FOOT_HEIGHT_SENSOR,
@@ -167,25 +160,10 @@ def get_foot_height_sensor_cfg() -> TerrainHeightSensorCfg:
   )
 
 
-def get_base_height_sensor_cfg() -> TerrainHeightSensorCfg:
-  """Base clearance above local terrain.
-
-  ``reduction="mean"``, not ``"min"``: a single boulder under the belly should not read as
-  the robot having collapsed. This feeds both the base-height reward and the low-clearance
-  termination -- the terrain-relative replacement for ``root_height_below_minimum``, which
-  reads absolute world z and is unusable on generated terrain.
-  """
-  return TerrainHeightSensorCfg(
-    name=BASE_HEIGHT_SENSOR,
-    frame=ObjRef(type="body", name="base", entity="robot"),
-    pattern=RingPatternCfg.single_ring(radius=0.12, num_samples=8),
-    reduction="mean",
-    max_distance=2.0,
-    include_geom_groups=(0,),
-  )
-
-
 def _body_contact_sensor_cfg(name: str, geom_names: tuple[str, ...]) -> ContactSensorCfg:
+  # history_length = decimation: ``self_collision_cost`` and ``illegal_contact`` both look
+  # at every physics substep, so a contact that starts and ends inside one control step
+  # still counts.
   return ContactSensorCfg(
     name=name,
     primary=ContactMatch(mode="geom", pattern=geom_names, entity="robot"),
@@ -198,15 +176,15 @@ def _body_contact_sensor_cfg(name: str, geom_names: tuple[str, ...]) -> ContactS
 
 
 def get_body_contact_sensor_cfgs() -> tuple[ContactSensorCfg, ...]:
-  """Thigh / shank / trunk vs terrain.
+  """Legs / trunk vs terrain.
 
-  Thigh and shank contacts are *penalised* rather than terminating: on jagged ground a Go2
-  brushes its legs constantly, and mjlab's Go1 rough task (which does terminate on thigh
-  contact) is tuned for a tamer terrain mix. Only the trunk terminates.
+  Leg contacts are *penalised* rather than terminating: on jagged ground a Go2 brushes
+  its legs constantly, and mjlab's Go1 rough task (which does terminate on thigh contact)
+  is tuned for a tamer terrain mix. Only the trunk terminates -- which also covers a
+  belly-down collapse, so no separate base-height sensor or termination is needed.
   """
   return (
-    _body_contact_sensor_cfg(THIGH_CONTACT_SENSOR, THIGH_COLLISION_GEOMS),
-    _body_contact_sensor_cfg(SHANK_CONTACT_SENSOR, SHANK_COLLISION_GEOMS),
+    _body_contact_sensor_cfg(LEG_CONTACT_SENSOR, LEG_COLLISION_GEOMS),
     _body_contact_sensor_cfg(TRUNK_CONTACT_SENSOR, TRUNK_COLLISION_GEOMS),
   )
 

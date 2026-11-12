@@ -1,13 +1,13 @@
 """MDP terms that exist only for the rugged-terrain task.
 
-Everything terrain-agnostic is imported from ``go2.mdp`` instead of being duplicated --
-this module holds only what genuinely does not exist yet:
+Three things, because that is all mjlab and ``go2.mdp`` do not already provide:
 
-* terrain-relative replacements for the flat task's absolute-world-z height terms,
-* body-frame velocity penalties (the flat ones are world-frame and charge for climbing),
-* two critic observations sourced from the terrain sensors,
-* a survival-based terrain curriculum and a command-envelope ramp,
-* subclasses that add the ``reset`` hooks mjlab and ``go2.mdp`` are both missing.
+* ``SprintVelocityCommand`` -- mjlab's uniform velocity command, with forward speed above
+  cruise allowed only over the sprint lanes.
+* ``feet_air_time`` -- the first-contact air-time reward, reading the right sensor field.
+* ``lin_vel_z_b`` -- vertical bounce in the body frame, so climbing a slope is free.
+
+Everything else in ``env_cfg`` is a built-in or comes from ``go2.mdp``.
 """
 
 from __future__ import annotations
@@ -17,253 +17,128 @@ from dataclasses import dataclass
 import torch
 
 from mjlab.envs import ManagerBasedRlEnv
-from mjlab.entity import Entity
 from mjlab.managers.scene_entity_config import SceneEntityCfg
-from mjlab.sensor import TerrainHeightSensor
-from mjlab.tasks.velocity.mdp.rewards import feet_swing_height as _feet_swing_height
-from mjlab.tasks.velocity.mdp.terrain_utils import terrain_normal_from_sensors
-from mjlab.utils.lab_api.math import quat_apply_inverse
+from mjlab.tasks.velocity.mdp.velocity_command import (
+  UniformVelocityCommand,
+  UniformVelocityCommandCfg,
+)
 
-from go2.constants import DEFAULT_HEIGHT
-from go2.mdp import Go2KickEvent, Go2VelocityCommand, Go2VelocityCommandCfg
+from go2.rugged.constants import CRUISE_SPEED, SPRINT_LANE_MARGIN, SPRINT_TERRAINS
 
 _ROBOT = SceneEntityCfg("robot")
 
 
 ##
-# Terrain-relative height terms.
-#
-# The flat task reads absolute world z for base height, foot clearance and the low-height
-# termination. On generated terrain that is meaningless: a robot standing correctly on a
-# 0.3 m rise reads 0.57, and one in a dip reads 0.1. These read clearance above the ground
-# *directly underneath*, from a TerrainHeightSensor.
+# Command.
 ##
 
 
-def _clearance(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:
-  """Base clearance above local terrain, [B]."""
-  sensor = env.scene[sensor_name]
-  assert isinstance(sensor, TerrainHeightSensor), (
-    f"{sensor_name} must be a TerrainHeightSensor, got {type(sensor).__name__}"
-  )
-  return sensor.data.heights[:, 0]
+class SprintVelocityCommand(UniformVelocityCommand):
+  """Uniform velocity command whose top forward speed depends on the ground underfoot.
 
+  Over a sprint lane the sampled ``vx`` is issued as is. Anywhere else its forward part is
+  scaled down so the top of the range lands on ``cruise_speed``. The rule is re-evaluated
+  every step from the robot's **current** position: a robot that runs off a lane sees its
+  command fall to cruise, and one that wanders onto a lane gets its sprint back.
 
-def base_height_above_terrain(
-  env: ManagerBasedRlEnv, sensor_name: str, target_height: float = DEFAULT_HEIGHT
-) -> torch.Tensor:
-  """Penalize crouching below the nominal stance height, [B].
+  Two things this deliberately does not do:
 
-  Deliberately **one-sided**: only clearance *below* target is penalized. A symmetric
-  term would charge the robot for the extra ride height it legitimately needs when
-  stepping over rubble or cresting a rise, which is exactly the behaviour we want.
-  """
-  deficit = torch.clamp(target_height - _clearance(env, sensor_name), min=0.0)
-  return torch.square(deficit)
+  * Gate on the *spawn* column. At 3.5 m/s a robot is off its 8 m patch in about a second,
+    so most of a spawn-gated sprint would be run on the neighbours.
+  * Read position inside ``_resample_command``. On the reset path that runs before mjlab's
+    ``forward()``, so body positions still belong to the episode that just ended.
+    ``_update_command`` runs after it.
 
-
-def base_clearance_below_minimum(
-  env: ManagerBasedRlEnv, sensor_name: str, minimum_height: float
-) -> torch.Tensor:
-  """Terminate when the base is dragging on the ground, [B] bool.
-
-  Replaces ``root_height_below_minimum``, which compares absolute world z against a
-  constant and is unusable on generated terrain -- it fires instantly on any patch below
-  the threshold and can never fire on a patch above it.
-  """
-  return _clearance(env, sensor_name) < minimum_height
-
-
-##
-# Body-frame velocity penalties.
-#
-# The flat task penalizes world-frame v_z and world-frame omega_xy. On a slope, climbing
-# at 1 m/s up a 0.45 grade has a legitimate world v_z of ~0.4 m/s, so the world-frame term
-# charges for doing the task. Body frame measures actual bouncing and wobble instead.
-##
-
-
-def lin_vel_z_b(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _ROBOT) -> torch.Tensor:
-  asset: Entity = env.scene[asset_cfg.name]
-  return torch.square(asset.data.root_link_lin_vel_b[:, 2])
-
-
-def ang_vel_xy_b(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _ROBOT) -> torch.Tensor:
-  asset: Entity = env.scene[asset_cfg.name]
-  return torch.sum(torch.square(asset.data.root_link_ang_vel_b[:, :2]), dim=1)
-
-
-##
-# Privileged (critic-only) terrain observations.
-##
-
-
-def base_clearance(env: ManagerBasedRlEnv, sensor_name: str) -> torch.Tensor:
-  """Base clearance above terrain, [B, 1]."""
-  return _clearance(env, sensor_name).unsqueeze(-1)
-
-
-def terrain_normal_b(
-  env: ManagerBasedRlEnv, sensor_names: tuple[str, ...], asset_cfg: SceneEntityCfg = _ROBOT
-) -> torch.Tensor:
-  """Local terrain surface normal in the body frame, [B, 3].
-
-  Tells the critic which way "downhill" is without the actor ever seeing it.
-  """
-  asset: Entity = env.scene[asset_cfg.name]
-  normal_w = terrain_normal_from_sensors(env, sensor_names)
-  return quat_apply_inverse(asset.data.root_link_quat_w, normal_w)
-
-
-##
-# Curriculum.
-##
-
-
-def terrain_levels_survival(
-  env: ManagerBasedRlEnv,
-  env_ids: torch.Tensor,
-  min_progress_frac: float = 0.25,
-  asset_cfg: SceneEntityCfg = _ROBOT,
-) -> dict[str, torch.Tensor]:
-  """Promote on survival + progress, demote on failure.
-
-  Deliberately NOT mjlab's ``terrain_levels_vel``. That demotes when net displacement is
-  below ``|cmd_xy| * episode_length_s * 0.5``, which assumes a *persistent* command.
-  ``Go2VelocityCommand`` re-jitters on an exponential schedule with yaw rates up to
-  1.5 rad/s, so net displacement is closer to a random walk while that threshold would
-  demand ~10 m -- every env would demote to level 0 and stay there.
-
-  Safe to read ``termination_manager`` here: ``_reset_idx`` runs the curriculum *before*
-  ``scene.reset`` and the reset events, so this still sees the finished episode.
-  """
-  terrain = env.scene.terrain
-  assert terrain is not None
-  generator = terrain.cfg.terrain_generator
-  assert generator is not None
-  asset: Entity = env.scene[asset_cfg.name]
-
-  distance = torch.norm(
-    asset.data.root_link_pos_w[env_ids, :2] - env.scene.env_origins[env_ids, :2], dim=1
-  )
-  # `terminated` excludes time_out/truncation, so running out the clock is not a failure.
-  fell = env.termination_manager.terminated[env_ids]
-  move_up = (~fell) & (distance > generator.size[0] * min_progress_frac)
-  move_down = fell
-  terrain.update_env_origins(env_ids, move_up, move_down)
-
-  levels = terrain.terrain_levels.float()
-  out: dict[str, torch.Tensor] = {"mean": levels.mean(), "max": levels.max()}
-  # Under curriculum=True each column is one sub-terrain, so column index -> name. These
-  # per-column means are the primary training dashboard: a column stuck at 0 is too hard,
-  # one pinned at max is too easy.
-  names = list(generator.sub_terrains)
-  origins = terrain.terrain_origins
-  if origins is not None and origins.shape[1] == len(names):
-    for i, name in enumerate(names):
-      mask = terrain.terrain_types == i
-      if mask.any():
-        out[name] = levels[mask].mean()
-  return out
-
-
-def command_bounds_stages(
-  env: ManagerBasedRlEnv,
-  env_ids: torch.Tensor,
-  command_name: str,
-  stages: tuple[tuple[int, tuple[float, float, float]], ...],
-) -> dict[str, torch.Tensor]:
-  """Ramp the velocity command envelope with training progress.
-
-  mjlab's ``commands_vel`` cannot be reused: it casts to ``UniformVelocityCommandCfg`` and
-  writes ``cfg.ranges``, which ``Go2VelocityCommandCfg`` does not have.
-  """
-  del env_ids  # Unused; the ramp is global, not per-env.
-  term = env.command_manager.get_term(command_name)
-  assert term is not None
-  for step, bounds in stages:
-    if env.common_step_counter >= step:
-      term.cfg.bounds = bounds
-      term.set_bounds(bounds)
-  current = term.cfg.bounds
-  return {
-    "vx": torch.tensor(current[0]),
-    "vy": torch.tensor(current[1]),
-    "wz": torch.tensor(current[2]),
-  }
-
-
-##
-# Command term with an explicit standing probability.
-##
-
-
-class RuggedVelocityCommand(Go2VelocityCommand):
-  """``Go2VelocityCommand`` that sometimes commands a full stop.
-
-  The inherited jitter scheme reaches all-zero on roughly 0.5% of resamples, which leaves
-  ``stand_still`` and every ``command_threshold`` gate effectively dead. Standing still on
-  a slope without sliding is a behaviour worth training, so make it explicit.
+  Scaling rather than clamping keeps the off-lane distribution uniform; a clamp would pile
+  a third of all technical-terrain commands onto exactly ``cruise_speed``.
   """
 
-  def set_bounds(self, bounds: tuple[float, float, float]) -> None:
-    """Update the sampling envelope in place (used by ``command_bounds_stages``)."""
-    self._bounds = torch.tensor(bounds, device=self.device)
+  cfg: SprintVelocityCommandCfg
+
+  def __init__(self, cfg: SprintVelocityCommandCfg, env: ManagerBasedRlEnv):
+    super().__init__(cfg, env)
+    terrain = env.scene.terrain
+    assert terrain is not None and terrain.cfg.terrain_generator is not None
+    generator = terrain.cfg.terrain_generator
+    names = list(generator.sub_terrains)
+    origins = terrain.terrain_origins  # [rows, cols, 3]
+    assert origins is not None and origins.shape[1] == len(names), (
+      "sprint lanes need curriculum=True terrain (one column per sub-terrain); "
+      "use the plain UniformVelocityCommandCfg otherwise"
+    )
+    missing = set(cfg.sprint_terrains) - set(names)
+    assert not missing, f"sprint terrains {missing} are not sub-terrains: {names}"
+    # Columns are laid out along world y (rows, i.e. difficulty, along x).
+    assert torch.allclose(origins[0, :, 0], origins[0, :1, 0]), "columns are not along y"
+    technical = [i for i, name in enumerate(names) if name not in cfg.sprint_terrains]
+    self._technical_y = origins[0, technical, 1]  # [T] column centre lines
+    self._keep_out = generator.size[1] / 2 + cfg.lane_margin
+    self._vx_sampled = torch.zeros(self.num_envs, device=self.device)
+
+  def on_lane(self) -> torch.Tensor:
+    """Whether each robot is at least ``lane_margin`` clear of technical terrain, [B]."""
+    y = self.robot.data.root_link_pos_w[:, 1]
+    gap = (y[:, None] - self._technical_y[None, :]).abs().min(dim=1).values
+    return gap > self._keep_out
 
   def _resample_command(self, env_ids: torch.Tensor) -> None:
     super()._resample_command(env_ids)
-    prob = getattr(self.cfg, "rel_standing_prob", 0.0)
-    if prob > 0.0:
-      standing = torch.rand(len(env_ids), device=self.device) < prob
-      self._command[env_ids] = torch.where(
-        standing.unsqueeze(1), torch.zeros_like(self._command[env_ids]),
-        self._command[env_ids],
-      )
+    self._vx_sampled[env_ids] = self.vel_command_b[env_ids, 0]
+
+  def _update_command(self, env_ids: torch.Tensor | None = None) -> None:
+    top = self.cfg.ranges.lin_vel_x[1]  # ramped by the commands_vel curriculum
+    scale = min(1.0, self.cfg.cruise_speed / top)
+    vx = self._vx_sampled
+    capped = torch.where(vx > 0.0, vx * scale, vx)
+    self.vel_command_b[:, 0] = torch.where(self.on_lane(), vx, capped)
+    super()._update_command(env_ids)  # heading control, then zeroes standing envs
 
 
 @dataclass(kw_only=True)
-class RuggedVelocityCommandCfg(Go2VelocityCommandCfg):
-  rel_standing_prob: float = 0.1
-  """Fraction of resamples that command a full stop."""
+class SprintVelocityCommandCfg(UniformVelocityCommandCfg):
+  cruise_speed: float = CRUISE_SPEED
+  """Top forward speed (m/s) off the sprint lanes."""
+  sprint_terrains: tuple[str, ...] = SPRINT_TERRAINS
+  """Sub-terrain names on which the full ``ranges.lin_vel_x`` applies."""
+  lane_margin: float = SPRINT_LANE_MARGIN
+  """How far (m) inside a lane a robot must be before it counts as on it."""
 
-  def build(self, env: ManagerBasedRlEnv) -> RuggedVelocityCommand:
-    return RuggedVelocityCommand(self, env)
+  def build(self, env: ManagerBasedRlEnv) -> SprintVelocityCommand:
+    return SprintVelocityCommand(self, env)
 
 
 ##
-# Reset hooks.
-#
-# The EventManager/RewardManager only call `reset` when the term object actually has the
-# attribute, so adding one is sufficient. Both parent classes are missing it, which means
-# a freshly reset env inherits the previous episode's state.
+# Rewards.
 ##
 
 
-class feet_swing_height(_feet_swing_height):
-  """mjlab's term plus the missing reset.
+def feet_air_time(
+  env: ManagerBasedRlEnv,
+  sensor_name: str,
+  command_name: str,
+  command_threshold: float = 0.05,
+  target_time: float = 0.2,
+) -> torch.Tensor:
+  """sum((air_time - target_time) * first_contact), gated by command activity.
 
-  Without this, ``peak_heights`` carries the previous episode's swing peak into the new
-  one's first landing and scores it as a tracking error.
+  Reads ``last_air_time``. The sensor has already zeroed ``current_air_time`` by the step
+  a foot lands, so ``go2.mdp.feet_air_time`` (which reads that) scores ``-target_time`` on
+  every touchdown regardless of how long the swing was -- a footfall penalty, not an
+  air-time reward. Not mjlab's ``feet_air_time`` either: that one pays per step for any
+  foot currently in the air, which rewards hovering a leg.
   """
+  sensor = env.scene[sensor_name]
+  first_contact = sensor.compute_first_contact(dt=env.step_dt)  # [B, 4]
+  air_time = sensor.data.last_air_time.clamp(max=0.5)
+  rew = torch.sum((air_time - target_time) * first_contact.float(), dim=1)
+  command = env.command_manager.get_command(command_name)
+  return rew * (torch.norm(command, dim=1) > command_threshold).float()
 
-  def reset(self, env_ids: torch.Tensor) -> None:
-    self.peak_heights[env_ids] = 0.0
 
+def lin_vel_z_b(env: ManagerBasedRlEnv, asset_cfg: SceneEntityCfg = _ROBOT) -> torch.Tensor:
+  """Squared body-frame vertical velocity, [B].
 
-class RuggedKickEvent(Go2KickEvent):
-  """``Go2KickEvent`` plus the missing reset.
-
-  Without this a freshly reset robot can be mid-kick, or inherit a cooldown, from whatever
-  the previous episode was doing.
+  Body frame, not world: climbing a 24 deg slope at 2 m/s has a legitimate world v_z of
+  0.8 m/s, and a world-frame term would charge for doing the task.
   """
-
-  def reset(self, env_ids: torch.Tensor | None = None) -> None:
-    if env_ids is None:
-      env_ids = slice(None)  # type: ignore[assignment]
-    n = self._num_envs if isinstance(env_ids, slice) else len(env_ids)
-    self._active[env_ids] = False
-    self._elapsed[env_ids] = 0.0
-    self._duration[env_ids] = 0.0
-    self._mag[env_ids] = 0.0
-    self._dir[env_ids] = 0.0
-    self._wait[env_ids] = self._sample(self._wait_range, n)
+  return torch.square(env.scene[asset_cfg.name].data.root_link_lin_vel_b[:, 2])

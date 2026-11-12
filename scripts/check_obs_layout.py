@@ -91,8 +91,8 @@ def main() -> None:
   # term order, stacking direction, reset backfill -- is what is under test here, and it
   # is independent of both.
   cfg.observations["actor"].enable_corruption = False
-  cfg.observations["actor"].terms = env_cfg._actor_terms(HISTORY_LENGTH, delay=False)
-  cfg.events.pop("kick", None)
+  cfg.observations["actor"].terms = env_cfg._actor_terms(delay=False)
+  cfg.events.pop("push")
 
   env = ManagerBasedRlEnv(cfg, device="cpu")
   obs, _ = env.reset()

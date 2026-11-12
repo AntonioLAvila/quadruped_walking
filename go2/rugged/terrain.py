@@ -1,4 +1,4 @@
-"""Rugged terrain: hills, slopes, jagged ground and shallow steps.
+"""Rugged terrain: two sprint lanes, then hills, slopes, jagged ground and shallow steps.
 
 Scope is deliberately bounded. This is a robustness upgrade over flat ground, not a
 parkour course: the policy is blind and should never need to plan a sequence of footholds.
@@ -12,8 +12,6 @@ from __future__ import annotations
 
 from mjlab.terrains import SubTerrainCfg, TerrainEntityCfg, TerrainGeneratorCfg
 from mjlab.terrains.config import (
-  box_random_grid,
-  discrete_obstacles,
   flat,
   hf_pyramid_slope,
   hf_pyramid_slope_inv,
@@ -22,37 +20,50 @@ from mjlab.terrains.config import (
   pyramid_stairs_inv,
   random_rough,
   random_spread_boxes,
-  wave_terrain,
 )
 
-# 8 m patches: a 20 s episode at the final 2.5 m/s command covers up to 50 m, so smaller
-# patches would have the robot spending most of its life in the neighbours.
+# 8 m patches. A robot at cruise speed still crosses one in a few seconds, so it spends
+# much of an episode on its neighbours -- which is why the sprint lanes below are adjacent
+# columns, and why the command is gated on where the robot *is* rather than where it
+# spawned (see ``rugged.mdp.SprintVelocityCommand``).
 PATCH_SIZE = (8.0, 8.0)
 NUM_LEVELS = 8
 
 
 def _sub_terrains() -> dict[str, SubTerrainCfg]:
-  """Fresh cfg objects per call.
+  """Fresh cfg objects per call. **Dict order is column order.**
 
   Deliberately not module-level constants and deliberately not ``dataclasses.replace`` of
   a shared cfg: ``replace`` is a shallow copy, and ``TerrainGenerator.__init__`` mutates
   ``sub_cfg.size`` on whatever objects it is handed. Two env cfgs built from a shared dict
   would alias each other.
+
+  Nine columns, down from twelve. Dropped after a 6000-iteration run: ``cobbles`` ended at
+  level 0.39 of 7 (a +/-8 cm grid is not learnable blind), ``waves`` duplicated ``hills``
+  and ``kerbs`` duplicated ``rubble``.
   """
   return {
-    # Keeps flat-ground competence in distribution.
-    "flat": flat(proportion=0.08),
-    # --- Jagged ground -------------------------------------------------------------
-    # HfRandomUniformTerrainCfg does `del difficulty` -- it has NO curriculum. Hence two
-    # fixed-severity columns rather than one that ramps. Their level curves will look
-    # flat in the logs; that is expected, not a bug.
+    # --- Sprint lanes ---------------------------------------------------------------
+    # These two must stay first and adjacent: together with the border apron beside
+    # column 0 they form one 16 m x 64 m strip a robot can hold top speed on. Their names
+    # are ``constants.SPRINT_TERRAINS``.
+    "flat": flat(proportion=0.15),
+    # Fixed severity (``scale_with_difficulty`` off), so every row is the same pavement:
+    # sprinting must survive ground that is not a perfect plane.
     "rough_light": random_rough(
-      proportion=0.12, noise_range=(0.01, 0.05), noise_step=0.005, border_width=0.25
+      proportion=0.15, noise_range=(0.01, 0.04), noise_step=0.005, border_width=0.25
     ),
-    "rough_coarse": random_rough(
-      proportion=0.12, noise_range=(0.05, 0.12), noise_step=0.02, border_width=0.25
+    # --- Technical terrain: capped at CRUISE_SPEED ------------------------------------
+    # Jagged ground that ramps with level, replacing the old fixed-severity column that
+    # sat at level 1.8 for an entire run because it had no easy end to start from.
+    "rough": random_rough(
+      proportion=0.12,
+      noise_range=(0.02, 0.12),
+      noise_step=0.01,
+      border_width=0.25,
+      scale_with_difficulty=True,
     ),
-    # --- Hills: smooth, difficulty-scaled relief. The main "hills" driver. ----------
+    # Smooth, difficulty-scaled relief.
     "hills": perlin_noise(
       proportion=0.14,
       height_range=(0.05, 0.35),
@@ -61,36 +72,33 @@ def _sub_terrains() -> dict[str, SubTerrainCfg]:
       persistence=0.4,
       border_width=0.5,
     ),
-    "waves": wave_terrain(
-      proportion=0.08, amplitude_range=(0.05, 0.25), num_waves=3, border_width=0.25
-    ),
-    # --- Sustained slopes. 0.45 rise/run = 24 deg, matched to the Go2's ~22 deg spec.
-    #     mjlab's ROUGH_TERRAINS_CFG uses 1.0 (45 deg), which is out of scope here.
+    # Sustained slopes. 0.45 rise/run = 24 deg, matched to the Go2's ~22 deg spec.
+    # mjlab's ROUGH_TERRAINS_CFG uses 1.0 (45 deg), which no foot friction in the DR
+    # range can hold.
     "slope": hf_pyramid_slope(
-      proportion=0.09, slope_range=(0.0, 0.45), platform_width=2.0, border_width=0.25
+      proportion=0.10, slope_range=(0.0, 0.45), platform_width=2.0, border_width=0.25
     ),
     "slope_inv": hf_pyramid_slope_inv(
-      proportion=0.09, slope_range=(0.0, 0.45), platform_width=2.0, border_width=0.25
+      proportion=0.10, slope_range=(0.0, 0.45), platform_width=2.0, border_width=0.25
     ),
-    # --- Shallow stairs: curbs and thresholds, not staircases. 2-8 cm rise on a 40 cm
-    #     tread is feelable blind; anything taller needs exteroception and foothold
-    #     planning, which is explicitly out of scope.
+    # Shallow stairs: curbs and thresholds, not staircases. 2-8 cm rise on a 40 cm tread
+    # is feelable blind; anything taller needs exteroception and foothold planning.
     "stairs_low": pyramid_stairs(
-      proportion=0.06,
+      proportion=0.08,
       step_height_range=(0.02, 0.08),
       step_width=0.40,
       platform_width=2.5,
       border_width=0.8,
     ),
     "stairs_low_inv": pyramid_stairs_inv(
-      proportion=0.06,
+      proportion=0.08,
       step_height_range=(0.02, 0.08),
       step_width=0.40,
       platform_width=2.5,
       border_width=0.8,
     ),
-    # --- Discrete rubble: the jagged extreme, difficulty-scaled. -------------------
-    # random_spread_boxes has add_floor=True, so boxes sit ON ground -- no voids.
+    # Discrete rubble. random_spread_boxes has add_floor=True, so boxes sit ON ground --
+    # no voids to fall into.
     "rubble": random_spread_boxes(
       proportion=0.08,
       num_boxes=60,
@@ -99,26 +107,6 @@ def _sub_terrains() -> dict[str, SubTerrainCfg]:
       box_height_range=(0.03, 0.15),
       platform_width=1.5,
       border_width=0.25,
-    ),
-    # merge_similar_heights collapses adjacent cells into larger boxes; without it this
-    # column alone emits ~400 geoms per patch.
-    "cobbles": box_random_grid(
-      proportion=0.04,
-      grid_width=0.4,
-      grid_height_range=(0.0, 0.08),  # +/-0.08 -> up to a 0.16 m step between cells
-      platform_width=1.5,
-      merge_similar_heights=True,
-    ),
-    # obstacle_height_mode="fixed" is REQUIRED. The default "choice" samples from
-    # [-h, -h/2, h/2, h], i.e. half the obstacles are pits sunk into the floor -- the
-    # fall-into-void failure mode this terrain set exists to avoid.
-    "kerbs": discrete_obstacles(
-      proportion=0.04,
-      obstacle_height_mode="fixed",
-      obstacle_height_range=(0.02, 0.10),
-      obstacle_width_range=(0.2, 0.8),
-      num_obstacles=30,
-      platform_width=1.5,
     ),
   }
 
@@ -129,7 +117,7 @@ def make_rugged_terrain_cfg(play: bool = False) -> TerrainEntityCfg:
   With ``curriculum=True`` mjlab **ignores ``num_cols``** and uses one column per
   sub-terrain, with difficulty increasing along rows. ``proportion`` then no longer sets
   the column count -- it only controls how robots are distributed across columns at spawn.
-  So this is a 12-column x 8-row grid regardless of what ``num_cols`` says.
+  So this is a 9-column x 8-row grid regardless of what ``num_cols`` says.
   """
   generator = TerrainGeneratorCfg(
     size=PATCH_SIZE,

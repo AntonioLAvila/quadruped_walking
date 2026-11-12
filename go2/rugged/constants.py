@@ -127,10 +127,13 @@ POSITION_ACTION_SCALE_FLAT = tuple(
 # NOT GO2_ACTUATORS[jt].damping. mjlab writes ``viscous_damping`` onto <joint damping>,
 # which stacks on top of the PD derivative gain rather than replacing it. Menagerie's 2.0
 # is a stand-in for unmodelled friction under *torque* control; reusing it here would give
-# 2.0 passive + kd active. For the hip (effective inertia ~0.03, critical damping ~1.55)
-# that is zeta ~1.9 -- heavily over-damped, where the real robot at kd=1.0 sits near 0.65.
-# A policy trained on over-damped joints oscillates on hardware.
-POSITION_VISCOUS_DAMPING = {"hip": 0.5, "thigh": 0.5, "calf": 0.5}
+# 2.0 passive + kd active, which is heavily over-damped.
+#
+# 0.1 is what the gait-switching project trained its 3 m/s policy on. The previous 0.5 is
+# not obviously wrong for the real robot, but it is expensive at speed: a swinging leg
+# reaches ~20 rad/s, where 0.5 burns 10 of the hip's 23.5 N*m just moving the joint. The
+# true value is uncertain, which is what the (0.4, 2.0) ``joint_damping`` DR range is for.
+POSITION_VISCOUS_DAMPING = {"hip": 0.1, "thigh": 0.1, "calf": 0.1}
 
 # Per-joint flats aligned to go2.constants.JOINT_NAMES, for the Drake control law.
 JOINT_KP_FLAT = tuple(GO2_ACTUATORS[jt].kp for _ in FEET for jt in JOINT_TYPES)
@@ -138,50 +141,62 @@ JOINT_KD_FLAT = tuple(GO2_ACTUATORS[jt].kd for _ in FEET for jt in JOINT_TYPES)
 
 ##
 # Velocity command envelope.
+#
+# Two tiers, because the two things this policy is for pull in opposite directions:
+#
+#   cruise  up to CRUISE_SPEED, on every terrain.
+#   sprint  up to the top of LIN_VEL_X_STAGES, only while the robot is over a sprint lane
+#           (SPRINT_TERRAINS). ``rugged.mdp.SprintVelocityCommand`` enforces it.
+#
+# CRUISE_SPEED is measured, not guessed. A 6000-iteration run that commanded 2.5 m/s on
+# every terrain showed 2.0 is where a blind policy stops improving on rough ground:
+#
+#   ramp to 2.0:  tracking 1.10 -> 0.76 -> recovered to 0.98, terrain 3.6 -> 4.4
+#   ramp to 2.5:  tracking 0.98 -> 0.71 and flat for 3500 iterations, terrain stalled,
+#                 falls doubled
+#
+# On flat ground the same robot tracks a 3.0 m/s envelope with no falls (gait-switching),
+# so the limit is the terrain, not the robot -- hence lanes rather than one number.
 ##
 
-# Final bounds (vx m/s, vy m/s, wz rad/s).
-#
-# Capped at 2.0, measured -- not guessed. A 6000-iteration run at 2.5 m/s showed this is
-# the boundary of what a blind policy can do on this terrain mix:
-#
-#   ramp to 2.0 (iter 800):   tracking 1.10 -> 0.76 -> recovered to 0.98
-#                             terrain  3.6  -> 4.4   kept climbing
-#   ramp to 2.5 (iter 2000):  tracking 0.98 -> 0.71   flat for 3500 iterations
-#                             terrain  4.47 -> 4.56   stalled (+0.09 in 3500 iters)
-#                             falls    0.06 -> 0.12   doubled
-#
-# Past 2.0 the policy spends its capacity chasing a command it cannot reach instead of
-# getting better at the ground, which is the actual objective. Raising this only pays off
-# with exteroception or a longer history -- see CLAUDE.md.
-#
-# Commanding faster than the policy can go is also a *reward trap*, not merely wasteful:
-# standing still banks the full `upright` + `pose` reward (~2.0/step) while an unreachable
-# velocity makes tracking hopeless either way, so standing becomes the optimum. That is
-# exactly what happened when a units bug let the ramp complete by iteration 40.
-COMMAND_BOUNDS = (2.0, 1.0, 1.5)
+CRUISE_SPEED = 2.0
+REVERSE_SPEED = 1.0
+LIN_VEL_Y = (-0.5, 0.5)
+ANG_VEL_Z = (-1.0, 1.0)
 
-# PPO rollout length. Lives here rather than in rl_cfg.py because COMMAND_STAGES needs it
+# Sub-terrain names (keys of ``rugged.terrain``'s dict) that may be sprinted on.
+SPRINT_TERRAINS = ("flat", "rough_light")
+# A robot counts as on a lane only this far (m) inside it, so the command has dropped to
+# cruise before the first foot lands on technical ground rather than after.
+SPRINT_LANE_MARGIN = 1.0
+
+# PPO rollout length. Lives here rather than in rl_cfg.py because the ramp below needs it
 # to convert iterations to env steps; rl_cfg.py imports it back.
 NUM_STEPS_PER_ENV = 50
 
-# Stage thresholds are compared against ``env.common_step_counter``, which counts
-# **environment steps**, NOT training iterations -- it increments once per env.step().
-# Writing iteration numbers here directly makes every stage fire ~50x too early.
+# (training iteration, top forward speed in m/s).
 #
-# Two stages, not three: 1.5 -> 2.0 was demonstrably absorbable in one step, and the third
-# stage now equals the second.
-_COMMAND_STAGE_ITERS = (
-  (0, (1.5, 0.8, 1.2)),
-  (800, COMMAND_BOUNDS),
+# The last rungs are a probe, not a promise: nothing here knows how fast the robot can
+# actually go. ``scripts/eval_rugged.py`` measures the speed reached at each command; if
+# the top rungs are out of reach, lower them to what it reports, because an unreachable
+# command is a reward trap (standing still banks ``upright`` + ``pose`` while tracking is
+# hopeless either way).
+_LIN_VEL_X_STAGE_ITERS = (
+  (0, 1.5),
+  (1000, 2.5),
+  (2000, 3.0),
+  (3000, 3.5),
+  (4000, 4.0),
 )
-COMMAND_STAGES = tuple(
-  (iteration * NUM_STEPS_PER_ENV, bounds) for iteration, bounds in _COMMAND_STAGE_ITERS
+SPRINT_SPEED = _LIN_VEL_X_STAGE_ITERS[-1][1]
+
+# mjlab's ``commands_vel`` compares against ``env.common_step_counter``, which counts
+# **environment steps**, NOT training iterations. Writing iteration numbers into the
+# curriculum directly makes every stage fire ~50x too early. Converted here, once.
+LIN_VEL_X_STAGES = tuple(
+  (iteration * NUM_STEPS_PER_ENV, (-REVERSE_SPEED, top))
+  for iteration, top in _LIN_VEL_X_STAGE_ITERS
 )
-# Fraction of resamples that command a full stop. Without this the jitter scheme reaches
-# all-zero in ~0.5% of resamples, leaving `stand_still` and every command gate dead.
-REL_STANDING_PROB = 0.1
-COMMAND_RESAMPLE_TIME_S = 8.0
 
 ##
 # Sensor names.
@@ -189,12 +204,5 @@ COMMAND_RESAMPLE_TIME_S = 8.0
 
 TERRAIN_SCAN_SENSOR = "terrain_scan"
 FOOT_HEIGHT_SENSOR = "foot_height_scan"
-BASE_HEIGHT_SENSOR = "base_height_scan"
-THIGH_CONTACT_SENSOR = "thigh_ground_touch"
-SHANK_CONTACT_SENSOR = "shank_ground_touch"
+LEG_CONTACT_SENSOR = "leg_ground_touch"
 TRUNK_CONTACT_SENSOR = "trunk_ground_touch"
-
-# Minimum base clearance above local terrain before the episode is a failure. The trunk
-# collision box half-height is 0.057, so belly-down is ~0.06 while nominal stance is 0.27;
-# 0.12 catches a collapse without firing on a deep crouch.
-MIN_BASE_CLEARANCE = 0.12
