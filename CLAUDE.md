@@ -15,9 +15,10 @@ task's config imports the other's:
 |---|---|---|
 | control | direct torque (`XmlActuatorCfg`) | PD position (`BuiltinPositionActuatorCfg`) |
 | rate | 200 Hz (0.0025 × 2) | 50 Hz (0.005 × 4) |
-| terrain | flat plane | generated, 12-column curriculum |
+| terrain | flat plane | generated, 9-column curriculum |
 | actor obs | 45, single frame | 225 = 45 × 5 frames of history |
-| critic obs | 120 | 495 |
+| critic obs | 120 | 283 |
+| top speed | 1.5 m/s | 2.0 m/s on terrain, sprint ladder to 4.0 m/s on the lanes |
 | experiment | `go2_velocity` | `go2_rugged` |
 
 ## Commands
@@ -56,7 +57,14 @@ uv run scripts/play.py Mjlab-Velocity-Rugged-Unitree-Go2 \
 
 # Sim-to-sim verification of an exported ONNX policy in Drake + meshcat (flat ground only).
 uv run scripts/verify_flat.py
-uv run scripts/verify_rugged.py [path/to/model.onnx]
+uv run scripts/verify_rugged.py [path/to/model.onnx] [--cmd 3.5 0 0]
+
+# Measure a rugged checkpoint: speed actually reached per sprint command, and success rate
+# per (terrain type, difficulty level). Headless. This is the only place either is reported.
+uv run scripts/eval_rugged.py [path/to/model_N.pt]
+
+# Re-tune the rugged task's PPO hyperparameters (15-run Bayesian sweep on wandb).
+uv run wandb sweep sweeps/ppo.yaml
 
 # Sanity-check the (upstream) robot MJCF still matches what this repo assumes. Asserts
 # topology/mass/names/margin/ctrlrange for both control modes.
@@ -69,6 +77,14 @@ uv run scripts/check_obs_layout.py
 # Generate the rugged terrain, print its cost, optionally open the viewer.
 uv run scripts/view_terrain.py [--view] [--play]
 ```
+
+**Plain `uv run` is enough; there is no wrapper script.** torch opens
+`libtorch_cuda_linalg.so` lazily and by bare filename, and when the loader credits that call to
+a library whose RPATH does not cover `torch/lib` the lookup falls through to `LD_LIBRARY_PATH`
+(a sourced ROS workspace) and fails with "cannot open shared object file". `scripts/_torch_linalg.py`
+opens the library once by absolute path, after which the loader matches later requests by SONAME
+and never searches. `train.py`, `play.py` and `eval_rugged.py` import it first; **any new GPU
+entry point must too.** It replaced `bin/uv-run`, which patched `LD_LIBRARY_PATH` from outside.
 
 There is no test suite, linter, or build step; the `scripts/check_*.py` files are the closest thing.
 Everything instantiates and steps on CPU (warp compiles CPU kernels), which is how the smoke tests
@@ -90,8 +106,10 @@ go2/
   flat/rl_cfg.py    its PPO cfg.
   rugged/           the rugged task, entirely self-contained (see below).
 go2_mjcf/           git submodule: the robot MJCF + meshes (see below).
-scripts/            train, play, verify_flat, verify_rugged, check_robot, check_obs_layout,
-                    view_terrain. Not a package -- each puts the repo root on sys.path.
+scripts/            train, play, verify_flat, verify_rugged, eval_rugged, check_robot,
+                    check_obs_layout, view_terrain. Not a package -- each puts the repo root
+                    on sys.path.
+sweeps/ppo.yaml     wandb sweep over the rugged task's PPO hyperparameters.
 ```
 
 A fresh clone needs `git submodule update --init` (and `uv sync`), or nothing that touches the
@@ -104,8 +122,9 @@ the firewall below.
 `go2/rugged/` mirrors that structure — `constants.py` (also stdlib-only), `robot.py`, `terrain.py`,
 `mdp.py`, `env_cfg.py`, `rl_cfg.py` — and **modifies nothing outside itself**. It reuses the flat
 task by importing it: `rugged/robot.get_spec()` wraps `go2.robot.get_spec()`, and `rugged/env_cfg`
-imports every terrain-agnostic reward and observation from `go2.mdp`. `rugged/mdp.py` holds only what
-does not otherwise exist.
+takes its terms from mjlab's built-ins first and `go2.mdp` second. `rugged/mdp.py` holds the three
+things neither provides: the sprint-lane command, a correct `feet_air_time`, and a body-frame
+`lin_vel_z`. Before adding a fourth, check `mjlab.envs.mdp` and `mjlab.tasks.velocity.mdp`.
 
 ### Cross-file contracts (the non-obvious parts)
 
@@ -204,52 +223,90 @@ direct-torque `<motor>`/`XmlActuator`, PD/position-actuator DR (e.g. `dr.effort_
 - *Actuator command delay* — modelled on the actuator cfg (not as an event), so it is disabled via
   `get_go2_robot_cfg(command_delay=...)` rather than popped from `events`.
 - *Observation delay* (rugged only) — sensor→policy latency on the four **sensed** actor terms, set
-  per `ObservationTermCfg` rather than as an event, so `play` rebuilds the terms with
-  `_actor_terms(..., delay=False)` instead of popping anything. **Its unit is control steps (20 ms
+  per `ObservationTermCfg` rather than as an event, so `play` builds the terms with
+  `_actor_terms(delay=False)` instead of popping anything. **Its unit is control steps (20 ms
   at 50 Hz), while the actuator delay's unit is physics steps (5 ms)** — they model different links
   in the chain and use different clocks. `last_action` and `command` get neither noise nor delay:
   no sensor sits in either path.
-- *Kick* — `go2_mdp.Go2KickEvent` applies a real half-sine external force (the original Brax kick
-  was a no-op; this is the deliberate functional version).
+- *Disturbance* — flat: `go2_mdp.Go2KickEvent` applies a real half-sine external force (the
+  original Brax kick was a no-op; this is the deliberate functional version). Rugged: mjlab's
+  built-in `push_by_setting_velocity` on an interval.
 
-**`play=True` mode** strips observation noise, the kick, and all DR, and makes episodes ~infinite. On
-the rugged task it additionally clears the curriculum, drops `out_of_bounds`, shrinks the terrain grid
-and adds a `randomize_terrain` reset event (the curriculum otherwise owns terrain levels/types, so the
-two are mutually exclusive).
+**`play=True` mode** strips observation noise, the kick/push, and all DR, and makes episodes
+~infinite. On the rugged task it additionally clears the curriculum, drops `out_of_bounds`, shrinks
+the terrain grid, adds a `randomize_terrain` reset event (the curriculum otherwise owns terrain
+levels/types, so the two are mutually exclusive), and swaps the sprint-lane command for mjlab's plain
+one at the full speed range — the play grid has no columns to gate on, and the viewer's joystick is
+the operator.
 
 ### The rugged task
 
-`go2/rugged/` is a **PD position-control, 50 Hz** task on generated terrain. Beyond the config, four
-things are worth knowing before touching it.
+`go2/rugged/` is a **PD position-control, 50 Hz** task on generated terrain: gait-switching's flat
+task (mjlab built-ins, energy-driven gait selection) with terrain put under it. One blind policy
+does two jobs — cross rough ground at up to `CRUISE_SPEED`, and sprint over open ground.
 
 **`rugged/robot.get_spec()` adds one delta on top of `go2.robot.get_spec()`: it deletes the
 `<actuator>` block.** `BuiltinPositionActuatorCfg` *adds* `<position>` elements without removing the
 MJCF's 12 `<motor>`s, which would give `nu=24`, a bogus keyframe torque bias on the orphans, and a
 corrupted joint→ctrl map in mjlab's ONNX metadata exporter.
 
-It used to add a second delta — naming the 19 anonymous group-3 collision geoms, since upstream
-Menagerie names only the four feet and contact sensors cannot otherwise address the thighs/shanks/
-trunk. `go2_mjcf` names all 23 itself, with **different names** than that pass generated, so the pass
-is gone and `TRUNK_/THIGH_/SHANK_COLLISION_GEOMS` in `rugged/robot.py` carry the XML's names
-(`torso_box`/`head_cyl`/`head_sphere`, `<leg>_thigh_col`, `<leg>_calf_upper`/`_lower`). Same counts,
-same geometry. Matching by *body* is still not a workaround: the foot geom is a child of the calf
-body, so a calf-body match fires on every footstep.
+Contact sensors address collision geoms by the names `go2_mjcf` gives them
+(`TRUNK_COLLISION_GEOMS` = `torso_box`/`head_cyl`/`head_sphere`; `LEG_COLLISION_GEOMS` =
+`<leg>_thigh_col`, `<leg>_calf_upper`/`_lower`). Matching by *body* is not a workaround: the foot
+geom is a child of the calf body, so a calf-body match fires on every footstep.
 
-**The actor is blind; terrain scans are critic-only.** `terrain_scan` (187 rays), `foot_height_scan`
-and `base_height_scan` feed the critic and the reward terms, never the policy. That is what makes the
+**The actor is blind; terrain scans are critic-only.** `terrain_scan` (187 rays) and
+`foot_height_scan` feed the critic and the reward terms, never the policy. That is what makes the
 exported policy deployable without an elevation map. Do not "helpfully" add a height scan to the actor.
 
-**Every height term is terrain-relative.** `base_height_above_terrain`, `feet_clearance`,
-`feet_swing_height` and the `low_clearance` termination read `TerrainHeightSensor` clearance, not
-`root_link_pos_w[:, 2]`. The flat task's `root_height_below_minimum` compares absolute world z against
-a constant and is *unusable* on generated terrain — it fires instantly on any patch below the
-threshold and can never fire above it. Do not port it across.
+**Every height term is terrain-relative.** `feet_clearance` reads `TerrainHeightSensor` clearance,
+`upright` scores attitude against the fitted terrain normal rather than gravity, and "the robot
+collapsed" is the trunk `illegal_contact` termination. The flat task's `root_height_below_minimum`
+compares absolute world z against a constant and is *unusable* on generated terrain — it fires
+instantly on any patch below the threshold and can never fire above it. Do not port it across.
 
-**The terrain curriculum is custom for a reason.** `rugged/mdp.terrain_levels_survival` promotes on
-survival plus progress. mjlab's `terrain_levels_vel` demotes when displacement is under
-`‖cmd_xy‖ · episode_length_s · 0.5`, which assumes a *persistent* command; `Go2VelocityCommand`
-re-jitters on an exponential schedule, so net displacement is closer to a random walk and every env
-would pin at level 0.
+**Sprint lanes — the two-tier speed envelope.** `CRUISE_SPEED` (2.0 m/s) applies everywhere; anything
+faster is only ever commanded while the robot is over a sprint lane (`SPRINT_TERRAINS`: the `flat`
+and `rough_light` columns). 2.0 is measured: a 6000-iteration run that commanded 2.5 m/s on every
+terrain saw tracking fall 0.98 → 0.71 and never recover, terrain progress stall (+0.09 levels in 3500
+iterations) and falls double, while the same robot tracks a 3.0 m/s envelope on flat ground with no
+falls. The limit is the terrain, not the robot, so the fix is lanes rather than a bigger number.
+Three properties of `rugged.mdp.SprintVelocityCommand` are load-bearing:
+
+- It gates on the robot's **current** position, every step. At 3.5 m/s a robot leaves an 8 m patch
+  in about a second, so gating on the spawn column would run most of every sprint on the neighbours.
+- It does that in `_update_command`, not `_resample_command`. On the reset path the resample runs
+  *before* mjlab's `forward()`, when body positions still belong to the episode that just ended.
+- Off-lane it **scales** forward speed into `[0, CRUISE_SPEED]` rather than clamping, which would
+  pile a third of all technical-terrain commands onto exactly 2.0.
+
+The two lane columns must stay **first and adjacent** in `rugged/terrain.py`'s dict (dict order is
+column order): with the border apron they form one 16 m × 64 m strip.
+
+**The top of the speed ladder is a probe, not a measurement.** `_LIN_VEL_X_STAGE_ITERS` ramps to
+4.0 m/s without knowing whether the robot can reach it. `scripts/eval_rugged.py` reports the speed
+reached at each command; lower the ladder to that. An unreachable command is a *reward trap*, not
+merely wasteful: standing still banks `upright` + `pose` while tracking is hopeless either way.
+
+Related trap: mjlab's `commands_vel` compares against `env.common_step_counter`, which counts
+**env steps, not iterations**. `_LIN_VEL_X_STAGE_ITERS` is written in iterations and converted in one
+place; writing raw iteration numbers into the curriculum makes the ramp fire ~50× early.
+
+**The simulated motors are ideal.** `BuiltinPositionActuatorCfg` delivers the full torque limit at
+any joint speed; the real motors lose torque as they spin up (about 30 rad/s no-load at hip/thigh,
+15.7 at the knee). That gap is widest exactly where the sprint lives. `eval_rugged.py`'s `outside`
+column reports how often the gait leans on torque the hardware does not have — read it before
+believing a top speed. Training against the curve means `DcMotorActuatorCfg`, and that breaks
+mjlab's ONNX metadata exporter, which reads PD gains off `gainprm`/`biasprm` (1 and 0 for a
+`<motor>`).
+
+**Both curricula are mjlab's.** `terrain_levels_vel` promotes a robot that got more than half a
+patch from its spawn and demotes one that covered under half the distance its command asked for.
+It needs the command to produce net displacement, which is why `heading_command` is on: a robot
+holding a yaw rate walks a circle and is demoted however well it tracks. The previous custom rule
+promoted on survival alone, and tracking ended at 0.80/2.0 — robots were promoted onto terrain they
+could stand on but not walk across. Expect mean level to drop to ~0 in the first few hundred
+iterations (nothing travels yet) and climb from there.
 
 **Observation history layout — the contract that breaks silently.** The actor obs is
 `ACTOR_TERM_WIDTHS × HISTORY_LENGTH`, laid out **term-major, oldest→newest**:
@@ -258,24 +315,18 @@ of legged_gym's time-major stacking. Anything rebuilding the observation outside
 `scripts/verify_rugged.py`, and eventually the robot — must match exactly and gets no error if it
 doesn't. `scripts/check_obs_layout.py` asserts it against the live env with `atol=0`; run it after any
 actor-term change. `HISTORY_LENGTH` is the single knob, but changing it changes the ONNX input width
-and forces a retrain.
+and forces a retrain. History is set on the actor *group*; mjlab still keeps one buffer per term, so
+the layout is the same as setting it per term.
 
-Two upstream bugs are worked around by subclassing in `rugged/mdp.py`: mjlab's `feet_swing_height` and
-`go2_mdp.Go2KickEvent` both lack a `reset` method, so their per-env state leaks across episode resets.
-The flat task still has both.
+**`go2.mdp.feet_air_time` is a footfall penalty, and the flat task still uses it.** It reads
+`current_air_time`, which mjlab's contact sensor has already zeroed on the step a foot lands, so it
+scores `-target_time` per touchdown however long the swing was. `rugged.mdp.feet_air_time` reads
+`last_air_time` instead. The flat task is left as is on purpose: fixing it changes that task's reward.
 
-**`COMMAND_BOUNDS` is capped at 2.0 m/s for a measured reason — don't raise it casually.** A full
-6000-iteration run at 2.5 m/s established the boundary: ramping to 2.0 cost tracking 1.10 → 0.76 and
-it recovered to 0.98 while terrain kept climbing 3.6 → 4.4, but ramping to 2.5 cost 0.98 → 0.71 and it
-never recovered, with terrain flat (+0.09 over 3500 iterations) and falls doubled. Past 2.0 the policy
-spends its capacity chasing an unreachable command instead of improving on terrain. Going faster needs
-exteroception or a longer history, not a bigger number.
-
-Related trap: `command_bounds_stages` compares against `env.common_step_counter`, which counts
-**env steps, not iterations**. `_COMMAND_STAGE_ITERS` is written in iterations and converted in one
-place; writing raw iteration numbers into `COMMAND_STAGES` makes the ramp fire ~50× early, which
-collapses the policy onto standing still (standing banks the full `upright` + `pose` reward while an
-unreachable command makes tracking hopeless either way).
+**The PPO hyperparameters were tuned on flat ground.** `rugged/rl_cfg.py` carries the winner of
+gait-switching's sweep. `Train/mean_reward` is the *stochastic* rollout's reward, so its low
+`entropy_coef` wins partly by shrinking action noise; treat the values as a starting point and
+cross-check any re-sweep with `eval_rugged.py`.
 
 ### Timing
 
