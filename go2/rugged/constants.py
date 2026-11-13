@@ -177,10 +177,11 @@ NUM_STEPS_PER_ENV = 50
 # (training iteration, top forward speed in m/s).
 #
 # The last rungs are a probe, not a promise: nothing here knows how fast the robot can
-# actually go. ``scripts/eval_rugged.py`` measures the speed reached at each command; if
-# the top rungs are out of reach, lower them to what it reports, because an unreachable
-# command is a reward trap (standing still banks ``upright`` + ``pose`` while tracking is
-# hopeless either way).
+# actually go, and ``scripts/eval_rugged.py`` is what measures the speed reached at each
+# command. Asking for more than the robot has is safe only because of the ``progress``
+# reward: without it an out-of-reach command is a reward trap, and the first full run
+# answered every command from 3.0 m/s up by standing still (see
+# ``rugged.mdp.forward_progress``).
 _LIN_VEL_X_STAGE_ITERS = (
   (0, 1.5),
   (1000, 2.5),

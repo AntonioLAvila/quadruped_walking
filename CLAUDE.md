@@ -122,9 +122,10 @@ the firewall below.
 `go2/rugged/` mirrors that structure — `constants.py` (also stdlib-only), `robot.py`, `terrain.py`,
 `mdp.py`, `env_cfg.py`, `rl_cfg.py` — and **modifies nothing outside itself**. It reuses the flat
 task by importing it: `rugged/robot.get_spec()` wraps `go2.robot.get_spec()`, and `rugged/env_cfg`
-takes its terms from mjlab's built-ins first and `go2.mdp` second. `rugged/mdp.py` holds the three
-things neither provides: the sprint-lane command, a correct `feet_air_time`, and a body-frame
-`lin_vel_z`. Before adding a fourth, check `mjlab.envs.mdp` and `mjlab.tasks.velocity.mdp`.
+takes its terms from mjlab's built-ins first and `go2.mdp` second. `rugged/mdp.py` holds the four
+things neither provides: the sprint-lane command, the `forward_progress` reward, a correct
+`feet_air_time`, and a body-frame `lin_vel_z`. Before adding a fifth, check `mjlab.envs.mdp` and
+`mjlab.tasks.velocity.mdp`.
 
 ### Cross-file contracts (the non-obvious parts)
 
@@ -284,9 +285,23 @@ The two lane columns must stay **first and adjacent** in `rugged/terrain.py`'s d
 column order): with the border apron they form one 16 m × 64 m strip.
 
 **The top of the speed ladder is a probe, not a measurement.** `_LIN_VEL_X_STAGE_ITERS` ramps to
-4.0 m/s without knowing whether the robot can reach it. `scripts/eval_rugged.py` reports the speed
-reached at each command; lower the ladder to that. An unreachable command is a *reward trap*, not
-merely wasteful: standing still banks `upright` + `pose` while tracking is hopeless either way.
+4.0 m/s without knowing whether the robot can reach it; `scripts/eval_rugged.py` reports the speed
+actually reached at each command.
+
+**The `progress` reward is what makes that safe — do not remove it or fold it into tracking.** The
+tracking kernel `exp(-err²/0.4)` is worth nothing, and has no gradient, once the robot is ~1 m/s
+short of its command. Under a 3.5 m/s command a robot that tops out at 2.7 therefore earns the same
+tracking reward flat out as standing, and standing collects yaw tracking + `pose` + `upright` for
+free. The first full run did exactly that: 2.5 m/s tracked at 99% by iteration 2400, then every
+command from 3.0 up produced a robot standing on the lane, with zero falls.
+`rugged.mdp.forward_progress` pays linearly for commanded speed made good, so an out-of-reach
+command means "run flat out". 800 fine-tune iterations with it took that policy from 0.0 to
+3.4 m/s at a 4.0 command.
+
+**The training curves do not show this failure.** Through that whole run
+`Episode_Reward/tracking_lin_vel` sat at ~1.5/2.0 and reward looked healthy, because sprint commands
+are ~9% of envs; the only hint was `Metrics/twist/error_vel_xy` creeping from 0.18 to 0.39 as the
+ladder rose. Run `eval_rugged.py` on a checkpoint before believing a run.
 
 Related trap: mjlab's `commands_vel` compares against `env.common_step_counter`, which counts
 **env steps, not iterations**. `_LIN_VEL_X_STAGE_ITERS` is written in iterations and converted in one

@@ -258,6 +258,13 @@ def _rewards() -> dict[str, RewardTermCfg]:
       weight=2.0,
       params={"command_name": COMMAND_NAME, "sigma": 0.4},
     ),
+    # The kernel above goes flat once the robot is ~1 m/s short of its command; this does
+    # not. Weighted to outbid what standing still collects for free (yaw tracking, pose
+    # and upright, about 2/s) net of what running costs, even when the command is far out
+    # of reach. See rugged.mdp.forward_progress.
+    "progress": RewardTermCfg(
+      func=rugged_mdp.forward_progress, weight=2.0, params={"command_name": COMMAND_NAME}
+    ),
     # Half the linear weight: a robot that gives up on a fast command and stands still
     # still earns this in full whenever the yaw command is zero.
     "tracking_ang_vel": RewardTermCfg(

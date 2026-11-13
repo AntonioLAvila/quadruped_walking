@@ -1,9 +1,11 @@
 """MDP terms that exist only for the rugged-terrain task.
 
-Three things, because that is all mjlab and ``go2.mdp`` do not already provide:
+Four things, because that is all mjlab and ``go2.mdp`` do not already provide:
 
 * ``SprintVelocityCommand`` -- mjlab's uniform velocity command, with forward speed above
   cruise allowed only over the sprint lanes.
+* ``forward_progress`` -- pays for commanded speed made good, so an out-of-reach command
+  means "run flat out" instead of "stand still".
 * ``feet_air_time`` -- the first-contact air-time reward, reading the right sensor field.
 * ``lin_vel_z_b`` -- vertical bounce in the body frame, so climbing a slope is free.
 
@@ -110,6 +112,32 @@ class SprintVelocityCommandCfg(UniformVelocityCommandCfg):
 ##
 # Rewards.
 ##
+
+
+def forward_progress(
+  env: ManagerBasedRlEnv,
+  command_name: str,
+  command_threshold: float = 0.05,
+  asset_cfg: SceneEntityCfg = _ROBOT,
+) -> torch.Tensor:
+  """Share of the commanded planar speed the robot is actually making good, in [0, 1].
+
+  This is what keeps a command the robot cannot reach from being a reason to stand still.
+  The tracking kernel ``exp(-err^2 / sigma)`` is worth nothing, and has no gradient, once
+  the robot is more than about 1 m/s short of its command -- so under a 3.5 m/s command a
+  robot that tops out at 2.7 earns the same tracking reward running flat out as it does
+  standing, and standing is free. The first full run did exactly that: 2.5 m/s tracked at
+  99%, then every command from 3.0 up produced a robot standing on the lane.
+
+  Linear in speed along the commanded direction and capped at the command, so going
+  faster always pays, overshoot never does, and precision is still the kernel's job.
+  """
+  command = env.command_manager.get_command(command_name)[:, :2]
+  speed = torch.norm(command, dim=1)
+  velocity = env.scene[asset_cfg.name].data.root_link_lin_vel_b[:, :2]
+  made_good = torch.sum(velocity * command, dim=1) / speed.clamp(min=command_threshold)
+  share = (made_good / speed.clamp(min=command_threshold)).clamp(0.0, 1.0)
+  return share * (speed > command_threshold).float()
 
 
 def feet_air_time(
