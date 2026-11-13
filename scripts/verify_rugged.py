@@ -2,8 +2,7 @@
 
     uv run scripts/verify_rugged.py [path/to/model.onnx] [--cmd VX VY WZ] [--no-noise]
 
-``--cmd 3.5 0 0`` checks the sprint gait: the floor here is a flat plane, which is exactly
-what a sprint lane is.
+``--cmd 3.0 0 0`` checks the gait at the top of the command range.
 
 This is a **flat-ground** check, deliberately. Putting mjlab's heightfield terrain into
 Drake is a project, not a fix, and it is not what this script exists for. What it does

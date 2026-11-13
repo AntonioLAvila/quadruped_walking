@@ -58,7 +58,7 @@ uv run scripts/play.py Mjlab-Velocity-Flat-Unitree-Go2 \
 
 # Sim-to-sim verification of an exported ONNX policy in Drake + meshcat.
 uv run scripts/verify_flat.py
-uv run scripts/verify_rugged.py --cmd 3.5 0 0
+uv run scripts/verify_rugged.py --cmd 3.0 0 0
 
 # How fast does a rugged checkpoint really go, and which terrain can it cross?
 uv run scripts/eval_rugged.py
@@ -70,9 +70,8 @@ uv run scripts/check_robot.py
 with the loop being closed by the Go2's motor drivers.
 
 The rugged policy is blind (proprioception plus a short history, no elevation map). It is trained to
-cross hills, slopes, jagged ground and shallow steps at up to 2.0 m/s, and to sprint faster than
-that only over open ground — commands above 2.0 m/s are issued just while the robot is on a "sprint
-lane" of flat or lightly rough terrain.
+cross hills, slopes, jagged ground and shallow steps under one command envelope on every terrain:
+forward speed up to 3.0 m/s, the same as the gait-switching project it borrows its reward set from.
 
 Checkpoints and the exported `model.onnx` land in `logs/rsl_rl/<experiment_name>/<run_name>/`.
 

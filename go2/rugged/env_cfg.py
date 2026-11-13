@@ -1,9 +1,9 @@
 """Rugged-terrain Go2 velocity task: PD position control, 50 Hz, blind actor + history.
 
-One policy for two jobs: cross hills, slopes, jagged ground and shallow steps at up to
-``CRUISE_SPEED``, and sprint as fast as the robot will go over open ground. It is the
-gait-switching project's flat task (mjlab built-ins, energy-driven gait selection) with
-terrain underneath it.
+One blind policy that crosses hills, slopes, jagged ground and shallow steps under
+gait-switching's command envelope (forward speed up to ``TOP_SPEED``). It is that
+project's flat task (mjlab built-ins, energy-driven gait selection) with terrain
+underneath it.
 
 What makes it deployable, and what to keep true when editing:
 
@@ -12,8 +12,8 @@ What makes it deployable, and what to keep true when editing:
   what let it infer the ground.
 * **Every height term is terrain-relative**, read from raycast sensors. Absolute world z
   means nothing on generated terrain.
-* **Speed above cruise is only ever commanded over a sprint lane.** See
-  ``rugged.mdp.SprintVelocityCommand``.
+* **The command envelope stops at ``TOP_SPEED``.** Asking for more than the robot has
+  buys speed with flight time and the whole gait turns into a hop.
 
 Nothing outside ``go2/rugged/`` is modified; terrain-agnostic terms come from ``go2.mdp``.
 
@@ -89,6 +89,7 @@ from go2.rugged.constants import (
   ACTOR_DELAY_STEPS,
   ACTOR_NOISE,
   ANG_VEL_Z,
+  BASE_MASS_SCALE,
   FOOT_HEIGHT_SENSOR,
   HISTORY_LENGTH,
   LEG_CONTACT_SENSOR,
@@ -207,18 +208,15 @@ def _critic_terms() -> dict[str, ObservationTermCfg]:
 
 
 def _command(play: bool) -> UniformVelocityCommandCfg:
-  """mjlab's uniform velocity command; in training, with the sprint-lane rule on top.
+  """mjlab's uniform velocity command, unmodified, on every terrain.
 
-  ``play`` uses the plain built-in with the full range: its terrain grid is sampled
-  randomly rather than laid out in columns, so there are no lanes to gate on, and the
-  viewer's joystick is the operator.
+  ``play`` opens the full speed range at once instead of waiting for the curriculum.
 
   ``heading_command`` is here for the terrain curriculum, which promotes on distance
   travelled from the spawn point: a robot holding a yaw rate walks a circle and gets
   nowhere however well it tracks. Heading envs turn to a target and then go straight.
   """
-  cls = UniformVelocityCommandCfg if play else rugged_mdp.SprintVelocityCommandCfg
-  return cls(
+  return UniformVelocityCommandCfg(
     entity_name="robot",
     resampling_time_range=(8.0, 16.0),
     rel_standing_envs=0.1,
@@ -349,10 +347,15 @@ def _events() -> dict[str, EventTermCfg]:
   base = SceneEntityCfg("robot", body_names=(BASE_BODY,))
   all_joints = SceneEntityCfg("robot", joint_names=(".*",))
   return {
+    # alpha is a log-scale: mass and inertia both scale by exp(2 * alpha).
     "base_inertial": EventTermCfg(
       func=dr.pseudo_inertia,
       mode="startup",
-      params={"asset_cfg": base, "alpha_range": (-0.1, 0.1), "t_range": (-0.02, 0.02)},
+      params={
+        "asset_cfg": base,
+        "alpha_range": tuple(0.5 * math.log(scale) for scale in BASE_MASS_SCALE),
+        "t_range": (-0.02, 0.02),
+      },
     ),
     "foot_friction": EventTermCfg(
       func=dr.geom_friction,

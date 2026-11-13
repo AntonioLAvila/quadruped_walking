@@ -142,54 +142,40 @@ JOINT_KD_FLAT = tuple(GO2_ACTUATORS[jt].kd for _ in FEET for jt in JOINT_TYPES)
 ##
 # Velocity command envelope.
 #
-# Two tiers, because the two things this policy is for pull in opposite directions:
+# One envelope on every terrain, and it is gait-switching's: forward speed ramps to
+# TOP_SPEED, with the same lateral and yaw ranges.
 #
-#   cruise  up to CRUISE_SPEED, on every terrain.
-#   sprint  up to the top of LIN_VEL_X_STAGES, only while the robot is over a sprint lane
-#           (SPRINT_TERRAINS). ``rugged.mdp.SprintVelocityCommand`` enforces it.
+# Two things were tried and dropped, both because of what they did to the gait:
 #
-# CRUISE_SPEED is measured, not guessed. A 6000-iteration run that commanded 2.5 m/s on
-# every terrain showed 2.0 is where a blind policy stops improving on rough ground:
+#   * A ladder to 4.0 m/s. Asking for more than the robot has makes the optimizer buy speed
+#     with flight time, and the result hops at every speed, not only the top one.
+#   * Sprint lanes -- speeds above 2.0 only over the flat columns. They existed to make the
+#     4.0 ladder survivable on rough ground and went with it.
 #
-#   ramp to 2.0:  tracking 1.10 -> 0.76 -> recovered to 0.98, terrain 3.6 -> 4.4
-#   ramp to 2.5:  tracking 0.98 -> 0.71 and flat for 3500 iterations, terrain stalled,
-#                 falls doubled
-#
-# On flat ground the same robot tracks a 3.0 m/s envelope with no falls (gait-switching),
-# so the limit is the terrain, not the robot -- hence lanes rather than one number.
+# What that leaves open: 3.0 m/s is now also commanded on stairs and rubble, where a blind
+# robot will not reach it. The ``progress`` reward keeps an out-of-reach command from
+# becoming a reason to stand (see ``rugged.mdp.forward_progress``), and the terrain
+# curriculum demotes a robot that covers under half its commanded distance, so expect
+# terrain levels to settle lower than they would under a slower command.
 ##
 
-CRUISE_SPEED = 2.0
 REVERSE_SPEED = 1.0
 LIN_VEL_Y = (-0.5, 0.5)
 ANG_VEL_Z = (-1.0, 1.0)
-
-# Sub-terrain names (keys of ``rugged.terrain``'s dict) that may be sprinted on.
-SPRINT_TERRAINS = ("flat", "rough_light")
-# A robot counts as on a lane only this far (m) inside it, so the command has dropped to
-# cruise before the first foot lands on technical ground rather than after.
-SPRINT_LANE_MARGIN = 1.0
 
 # PPO rollout length. Lives here rather than in rl_cfg.py because the ramp below needs it
 # to convert iterations to env steps; rl_cfg.py imports it back.
 NUM_STEPS_PER_ENV = 50
 
-# (training iteration, top forward speed in m/s).
-#
-# The last rungs are a probe, not a promise: nothing here knows how fast the robot can
-# actually go, and ``scripts/eval_rugged.py`` is what measures the speed reached at each
-# command. Asking for more than the robot has is safe only because of the ``progress``
-# reward: without it an out-of-reach command is a reward trap, and the first full run
-# answered every command from 3.0 m/s up by standing still (see
-# ``rugged.mdp.forward_progress``).
+# (training iteration, top forward speed in m/s). gait-switching's ladder. Froude scaling
+# for this leg length puts trot-to-gallop near 2.7 m/s, so 3.0 clears it without asking
+# for much beyond.
 _LIN_VEL_X_STAGE_ITERS = (
   (0, 1.5),
   (1000, 2.5),
   (2000, 3.0),
-  (3000, 3.5),
-  (4000, 4.0),
 )
-SPRINT_SPEED = _LIN_VEL_X_STAGE_ITERS[-1][1]
+TOP_SPEED = _LIN_VEL_X_STAGE_ITERS[-1][1]
 
 # mjlab's ``commands_vel`` compares against ``env.common_step_counter``, which counts
 # **environment steps**, NOT training iterations. Writing iteration numbers into the
@@ -198,6 +184,14 @@ LIN_VEL_X_STAGES = tuple(
   (iteration * NUM_STEPS_PER_ENV, (-REVERSE_SPEED, top))
   for iteration, top in _LIN_VEL_X_STAGE_ITERS
 )
+
+##
+# Domain randomization.
+##
+
+# Trunk mass as a multiple of nominal (6.921 kg -> 5.5 to 9.3 kg). Skewed heavy on
+# purpose: a real robot only ever gains mass, from a payload or a bigger battery.
+BASE_MASS_SCALE = (0.8, 1.35)
 
 ##
 # Sensor names.

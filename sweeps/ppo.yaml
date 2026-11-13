@@ -31,8 +31,8 @@ command:
   - ${args}
 
 parameters:
-  # Fixed. The sprint ramp only reaches 3.0 m/s by iteration 2000, so 3000 iterations
-  # compares runs at cruise plus a moderate sprint, not at the top of the ladder.
+  # Fixed. The speed ramp reaches its 3.0 m/s top at iteration 2000, so 3000 iterations
+  # gives every run 1000 at the full command range.
   agent.max_iterations:
     value: 3000
   agent.save_interval:

@@ -62,7 +62,7 @@ def go2_rugged_ppo_runner_cfg() -> RslRlOnPolicyRunnerCfg:
     # runs indistinguishable from the flat task's on the dashboard.
     wandb_project="go2-rugged",
     run_name="rugged",
-    wandb_tags=("rugged-terrain", "pd-position", "50hz", "blind-history", "sprint-lanes"),
+    wandb_tags=("rugged-terrain", "pd-position", "50hz", "blind-history"),
     save_interval=100,
     num_steps_per_env=NUM_STEPS_PER_ENV,
     max_iterations=DEFAULT_NUM_IT,

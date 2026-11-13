@@ -1,4 +1,4 @@
-"""Rugged terrain: two sprint lanes, then hills, slopes, jagged ground and shallow steps.
+"""Rugged terrain: open ground, then hills, slopes, jagged ground and shallow steps.
 
 Scope is deliberately bounded. This is a robustness upgrade over flat ground, not a
 parkour course: the policy is blind and should never need to plan a sequence of footholds.
@@ -22,10 +22,8 @@ from mjlab.terrains.config import (
   random_spread_boxes,
 )
 
-# 8 m patches. A robot at cruise speed still crosses one in a few seconds, so it spends
-# much of an episode on its neighbours -- which is why the sprint lanes below are adjacent
-# columns, and why the command is gated on where the robot *is* rather than where it
-# spawned (see ``rugged.mdp.SprintVelocityCommand``).
+# 8 m patches. At 3 m/s a robot crosses one in under three seconds, so it spends much of
+# an episode on its neighbours rather than on the column it spawned in.
 PATCH_SIZE = (8.0, 8.0)
 NUM_LEVELS = 8
 
@@ -43,17 +41,17 @@ def _sub_terrains() -> dict[str, SubTerrainCfg]:
   and ``kerbs`` duplicated ``rubble``.
   """
   return {
-    # --- Sprint lanes ---------------------------------------------------------------
-    # These two must stay first and adjacent: together with the border apron beside
-    # column 0 they form one 16 m x 64 m strip a robot can hold top speed on. Their names
-    # are ``constants.SPRINT_TERRAINS``.
+    # --- Open ground ------------------------------------------------------------------
+    # The 30% of robots that can actually reach the top of the command range. Kept
+    # adjacent so they form one 16 m x 64 m strip: ``scripts/eval_rugged.py`` measures
+    # top speed by running the length of each.
     "flat": flat(proportion=0.15),
     # Fixed severity (``scale_with_difficulty`` off), so every row is the same pavement:
-    # sprinting must survive ground that is not a perfect plane.
+    # running fast must survive ground that is not a perfect plane.
     "rough_light": random_rough(
       proportion=0.15, noise_range=(0.01, 0.04), noise_step=0.005, border_width=0.25
     ),
-    # --- Technical terrain: capped at CRUISE_SPEED ------------------------------------
+    # --- Technical terrain ------------------------------------------------------------
     # Jagged ground that ramps with level, replacing the old fixed-severity column that
     # sat at level 1.8 for an entire run because it had no easy end to start from.
     "rough": random_rough(

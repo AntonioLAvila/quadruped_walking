@@ -18,7 +18,7 @@ task's config imports the other's:
 | terrain | flat plane | generated, 9-column curriculum |
 | actor obs | 45, single frame | 225 = 45 × 5 frames of history |
 | critic obs | 120 | 283 |
-| top speed | 1.5 m/s | 2.0 m/s on terrain, sprint ladder to 4.0 m/s on the lanes |
+| top speed | 1.5 m/s | 3.0 m/s, on every terrain |
 | experiment | `go2_velocity` | `go2_rugged` |
 
 ## Commands
@@ -57,9 +57,9 @@ uv run scripts/play.py Mjlab-Velocity-Rugged-Unitree-Go2 \
 
 # Sim-to-sim verification of an exported ONNX policy in Drake + meshcat (flat ground only).
 uv run scripts/verify_flat.py
-uv run scripts/verify_rugged.py [path/to/model.onnx] [--cmd 3.5 0 0]
+uv run scripts/verify_rugged.py [path/to/model.onnx] [--cmd 3.0 0 0]
 
-# Measure a rugged checkpoint: speed actually reached per sprint command, and success rate
+# Measure a rugged checkpoint: speed actually reached per forward command, and success rate
 # per (terrain type, difficulty level). Headless. This is the only place either is reported.
 uv run scripts/eval_rugged.py [path/to/model_N.pt]
 
@@ -122,9 +122,9 @@ the firewall below.
 `go2/rugged/` mirrors that structure — `constants.py` (also stdlib-only), `robot.py`, `terrain.py`,
 `mdp.py`, `env_cfg.py`, `rl_cfg.py` — and **modifies nothing outside itself**. It reuses the flat
 task by importing it: `rugged/robot.get_spec()` wraps `go2.robot.get_spec()`, and `rugged/env_cfg`
-takes its terms from mjlab's built-ins first and `go2.mdp` second. `rugged/mdp.py` holds the four
-things neither provides: the sprint-lane command, the `forward_progress` reward, a correct
-`feet_air_time`, and a body-frame `lin_vel_z`. Before adding a fifth, check `mjlab.envs.mdp` and
+takes its terms from mjlab's built-ins first and `go2.mdp` second. `rugged/mdp.py` holds the three
+things neither provides: the `forward_progress` reward, a correct
+`feet_air_time`, and a body-frame `lin_vel_z`. Before adding a fourth, check `mjlab.envs.mdp` and
 `mjlab.tasks.velocity.mdp`.
 
 ### Cross-file contracts (the non-obvious parts)
@@ -216,7 +216,9 @@ direct-torque `<motor>`/`XmlActuator`, PD/position-actuator DR (e.g. `dr.effort_
 `dr.pd_gains`) does **not** apply here.
 
 **Robustness / sim-to-real features** (both tasks unless noted):
-- *Physical domain randomization* — startup events via `mjlab.envs.mdp.dr`: base mass/inertia/CoM,
+- *Physical domain randomization* — startup events via `mjlab.envs.mdp.dr`: base mass/inertia/CoM
+  (trunk mass ×0.82–1.22 on flat; ×0.8–1.35 on rugged, set by `BASE_MASS_SCALE` and skewed heavy
+  for payload),
   per-foot friction (tangential + torsional/rolling), joint frictionloss/damping/armature, encoder
   bias. Keys are collected in `_DR_EVENT_KEYS` and popped in `play` mode. The rugged task adds
   `dr.pd_gains` and `dr.effort_limits`, which **only work under position actuators** — both raise
@@ -236,15 +238,14 @@ direct-torque `<motor>`/`XmlActuator`, PD/position-actuator DR (e.g. `dr.effort_
 **`play=True` mode** strips observation noise, the kick/push, and all DR, and makes episodes
 ~infinite. On the rugged task it additionally clears the curriculum, drops `out_of_bounds`, shrinks
 the terrain grid, adds a `randomize_terrain` reset event (the curriculum otherwise owns terrain
-levels/types, so the two are mutually exclusive), and swaps the sprint-lane command for mjlab's plain
-one at the full speed range — the play grid has no columns to gate on, and the viewer's joystick is
-the operator.
+levels/types, so the two are mutually exclusive), and opens the command's full speed range at once
+instead of waiting for the curriculum.
 
 ### The rugged task
 
 `go2/rugged/` is a **PD position-control, 50 Hz** task on generated terrain: gait-switching's flat
-task (mjlab built-ins, energy-driven gait selection) with terrain put under it. One blind policy
-does two jobs — cross rough ground at up to `CRUISE_SPEED`, and sprint over open ground.
+task (mjlab built-ins, energy-driven gait selection) with terrain put under it. One blind policy,
+one command envelope (forward speed up to `TOP_SPEED`) on every terrain.
 
 **`rugged/robot.get_spec()` adds one delta on top of `go2.robot.get_spec()`: it deletes the
 `<actuator>` block.** `BuiltinPositionActuatorCfg` *adds* `<position>` elements without removing the
@@ -266,41 +267,40 @@ collapsed" is the trunk `illegal_contact` termination. The flat task's `root_hei
 compares absolute world z against a constant and is *unusable* on generated terrain — it fires
 instantly on any patch below the threshold and can never fire above it. Do not port it across.
 
-**Sprint lanes — the two-tier speed envelope.** `CRUISE_SPEED` (2.0 m/s) applies everywhere; anything
-faster is only ever commanded while the robot is over a sprint lane (`SPRINT_TERRAINS`: the `flat`
-and `rough_light` columns). 2.0 is measured: a 6000-iteration run that commanded 2.5 m/s on every
-terrain saw tracking fall 0.98 → 0.71 and never recover, terrain progress stall (+0.09 levels in 3500
-iterations) and falls double, while the same robot tracks a 3.0 m/s envelope on flat ground with no
-falls. The limit is the terrain, not the robot, so the fix is lanes rather than a bigger number.
-Three properties of `rugged.mdp.SprintVelocityCommand` are load-bearing:
+**One speed envelope on every terrain, and it is gait-switching's.** Forward speed ramps
+0 → 1.5, 1000 → 2.5, 2000 → 3.0 m/s (`_LIN_VEL_X_STAGE_ITERS`; `TOP_SPEED` is its last rung), with
+lateral ±0.5 and yaw ±1.0. Two things were tried and removed, and neither should come back without
+a reason the first attempt did not have:
 
-- It gates on the robot's **current** position, every step. At 3.5 m/s a robot leaves an 8 m patch
-  in about a second, so gating on the spawn column would run most of every sprint on the neighbours.
-- It does that in `_update_command`, not `_resample_command`. On the reset path the resample runs
-  *before* mjlab's `forward()`, when body positions still belong to the episode that just ended.
-- Off-lane it **scales** forward speed into `[0, CRUISE_SPEED]` rather than clamping, which would
-  pile a third of all technical-terrain commands onto exactly 2.0.
+- *A ladder to 4.0 m/s.* It worked by the numbers — 3.36 m/s reached at a 3.5 command, 2.87 at 3.0,
+  no falls — and produced a gait that hops at every speed. Asking for more than the robot has makes
+  the optimizer buy speed with flight time, and one policy carries that gait down to 1 m/s.
+  **`eval_rugged.py` cannot see this**: its tables looked good for that run. Watch a checkpoint in
+  the viewer before believing it.
+- *Sprint lanes* (`SprintVelocityCommand`: speeds above 2.0 m/s only while over the `flat` and
+  `rough_light` columns). They existed to make the 4.0 ladder survivable on rough ground and went
+  with it. The command is now mjlab's `UniformVelocityCommandCfg`, unmodified.
 
-The two lane columns must stay **first and adjacent** in `rugged/terrain.py`'s dict (dict order is
-column order): with the border apron they form one 16 m × 64 m strip.
+What that leaves open: 3.0 m/s is also commanded on stairs and rubble, where a blind robot will not
+reach it. An earlier version of this task that commanded 2.5 m/s on every terrain saw tracking fall
+0.98 → 0.71 and terrain progress stall — but that was under a curriculum that promoted on survival
+alone and without the `progress` reward, so it is a warning rather than a prediction.
+`terrain_levels_vel` demotes a robot that covers under half its commanded distance, so expect
+terrain levels to settle lower than they would under a slower command.
 
-**The top of the speed ladder is a probe, not a measurement.** `_LIN_VEL_X_STAGE_ITERS` ramps to
-4.0 m/s without knowing whether the robot can reach it; `scripts/eval_rugged.py` reports the speed
-actually reached at each command.
-
-**The `progress` reward is what makes that safe — do not remove it or fold it into tracking.** The
-tracking kernel `exp(-err²/0.4)` is worth nothing, and has no gradient, once the robot is ~1 m/s
-short of its command. Under a 3.5 m/s command a robot that tops out at 2.7 therefore earns the same
-tracking reward flat out as standing, and standing collects yaw tracking + `pose` + `upright` for
-free. The first full run did exactly that: 2.5 m/s tracked at 99% by iteration 2400, then every
-command from 3.0 up produced a robot standing on the lane, with zero falls.
-`rugged.mdp.forward_progress` pays linearly for commanded speed made good, so an out-of-reach
-command means "run flat out". 800 fine-tune iterations with it took that policy from 0.0 to
-3.4 m/s at a 4.0 command.
+**The `progress` reward is what makes an out-of-reach command safe — do not remove it or fold it
+into tracking.** The tracking kernel `exp(-err²/0.4)` is worth nothing, and has no gradient, once the
+robot is ~1 m/s short of its command. Under a 3.5 m/s command a robot that tops out at 2.7 therefore
+earns the same tracking reward flat out as standing, and standing collects yaw tracking + `pose` +
+`upright` for free. A run with the 4.0 ladder and no `progress` term did exactly that: 2.5 m/s
+tracked at 99% by iteration 2400, then every command from 3.0 up produced a robot standing still,
+with zero falls. `rugged.mdp.forward_progress` pays linearly for commanded speed made good, so an
+out-of-reach command means "go as fast as you can". With the ladder at 3.0 the trap is no longer on
+flat ground, but it is still there on every terrain the robot cannot cross at 3.0.
 
 **The training curves do not show this failure.** Through that whole run
-`Episode_Reward/tracking_lin_vel` sat at ~1.5/2.0 and reward looked healthy, because sprint commands
-are ~9% of envs; the only hint was `Metrics/twist/error_vel_xy` creeping from 0.18 to 0.39 as the
+`Episode_Reward/tracking_lin_vel` sat at ~1.5/2.0 and reward looked healthy, because the commands
+that failed were ~9% of envs; the only hint was `Metrics/twist/error_vel_xy` creeping from 0.18 to 0.39 as the
 ladder rose. Run `eval_rugged.py` on a checkpoint before believing a run.
 
 Related trap: mjlab's `commands_vel` compares against `env.common_step_counter`, which counts
@@ -309,7 +309,7 @@ place; writing raw iteration numbers into the curriculum makes the ramp fire ~50
 
 **The simulated motors are ideal.** `BuiltinPositionActuatorCfg` delivers the full torque limit at
 any joint speed; the real motors lose torque as they spin up (about 30 rad/s no-load at hip/thigh,
-15.7 at the knee). That gap is widest exactly where the sprint lives. `eval_rugged.py`'s `outside`
+15.7 at the knee). That gap is widest at the top of the speed range. `eval_rugged.py`'s `outside`
 column reports how often the gait leans on torque the hardware does not have — read it before
 believing a top speed. Training against the curve means `DcMotorActuatorCfg`, and that breaks
 mjlab's ONNX metadata exporter, which reads PD gains off `gainprm`/`biasprm` (1 and 0 for a

@@ -4,18 +4,17 @@
 
 Training logs cannot answer either question. ``Episode_Reward/tracking_lin_vel`` and
 ``Metrics/twist/error_vel_xy`` average over every command and every terrain, so a policy
-that tracks 1 m/s perfectly and ignores 4 m/s looks the same as one that is mediocre at
+that tracks 1 m/s perfectly and ignores 3 m/s looks the same as one that is mediocre at
 both. This runs fixed commands on fixed terrain cells and reports each one separately.
 
 Two tables, from one batch of environments with noise, latency, pushes and domain
 randomization all off:
 
-**Sprint.** Robots start at one end of each sprint lane facing down it and are commanded a
-constant forward speed. Reported: the speed they settle at, how many fell, and how often
-the gait asks a motor for torque outside the real motor's torque-speed envelope. The
-simulated actuators deliver full torque at any joint speed; the real ones do not, so a
-sprint that leans on that corner of the envelope is a sprint the hardware will not
-reproduce. Use the first column to set the top of ``LIN_VEL_X_STAGES``.
+**Speed.** Robots start at one end of each open-ground column facing down it and are
+commanded a constant forward speed. Reported: the speed they settle at, how many fell, and
+how often the gait asks a motor for torque outside the real motor's torque-speed envelope.
+The simulated actuators deliver full torque at any joint speed; the real ones do not, so a
+gait that leans on that corner of the envelope is one the hardware will not reproduce.
 
 **Terrain.** One group of robots per (sub-terrain, difficulty level, speed), started at the
 centre of the patch facing +x. A robot succeeds if it reaches the patch edge without
@@ -41,22 +40,20 @@ from mjlab.tasks.velocity.mdp.velocity_command import UniformVelocityCommandCfg 
 from mjlab.tasks.velocity.rl import VelocityOnPolicyRunner  # noqa: E402
 
 from go2.rugged import env_cfg  # noqa: E402
-from go2.rugged.constants import (  # noqa: E402
-  CRUISE_SPEED,
-  POSITION_TIMING,
-  SPRINT_SPEED,
-  SPRINT_TERRAINS,
-)
+from go2.rugged.constants import POSITION_TIMING, TOP_SPEED  # noqa: E402
 from go2.rugged.rl_cfg import go2_rugged_ppo_runner_cfg  # noqa: E402
 from go2.rugged.terrain import make_rugged_terrain_cfg  # noqa: E402
 
-SPRINT_COMMANDS = tuple(1.0 + 0.5 * i for i in range(int((SPRINT_SPEED - 1.0) / 0.5) + 1))
-TERRAIN_COMMANDS = (1.0, CRUISE_SPEED)
+# The two columns a robot can hold a speed down the whole length of (64 m each).
+SPEED_TERRAINS = ("flat", "rough_light")
+SPEED_COMMANDS = tuple(1.0 + 0.5 * i for i in range(int((TOP_SPEED - 1.0) / 0.5) + 1))
+# The whole command range is issued on every terrain in training, so all of it is scored.
+TERRAIN_COMMANDS = (1.0, 2.0, TOP_SPEED)
 
-# The sprint is scored over this window: long enough after the start for the robot to have
-# finished accelerating, short enough that the fastest command stays on the 64 m lane.
-SPRINT_SETTLE_S = 3.0
-SPRINT_END_S = 8.0
+# The run is scored over this window: long enough after the start for the robot to have
+# finished accelerating, short enough that the fastest command stays on the 64 m column.
+SPEED_SETTLE_S = 3.0
+SPEED_END_S = 8.0
 # Reaching this fraction of the half-patch counts as crossing it (mjlab's
 # ``terrain_edge_reached`` uses the same number).
 EDGE_FRACTION = 0.95
@@ -87,8 +84,8 @@ def make_cfg(num_envs: int):
   # which needs the training layout of one column per sub-terrain.
   cfg.scene.terrain = make_rugged_terrain_cfg(play=False)
   cfg.events.pop("randomize_terrain")
-  # Everyone faces +x: sprinters run down the lane, and the rest cross their patch along
-  # the difficulty axis rather than into a neighbouring terrain type.
+  # Everyone faces +x: the speed runs go down their column, and the rest cross their patch
+  # along the difficulty axis rather than into a neighbouring terrain type.
   cfg.events["reset_base"].params["pose_range"]["yaw"] = (0.0, 0.0)
   # A command term that never resamples and never edits what the loop below writes.
   cfg.commands[env_cfg.COMMAND_NAME] = UniformVelocityCommandCfg(
@@ -113,15 +110,15 @@ def main() -> None:
 
   names = list(make_rugged_terrain_cfg().terrain_generator.sub_terrains)
   num_levels = make_rugged_terrain_cfg().terrain_generator.num_rows
-  lanes = [names.index(n) for n in SPRINT_TERRAINS]
-  sprint_reps = 2 * args.reps
+  speed_cols = [names.index(n) for n in SPEED_TERRAINS]
+  speed_reps = 2 * args.reps
 
-  # One row per env: (kind, column, level, commanded vx). Sprint levels are filled in once
-  # the terrain exists, because which row is the -x end of a lane is a layout detail.
+  # One row per env: (kind, column, level, commanded vx). Speed-run levels are filled in
+  # once the terrain exists, because which row is the -x end of a column is a layout detail.
   plan: list[tuple[int, int, int, float]] = []
-  for col in lanes:
-    for vx in SPRINT_COMMANDS:
-      plan += [(0, col, -1, vx)] * sprint_reps
+  for col in speed_cols:
+    for vx in SPEED_COMMANDS:
+      plan += [(0, col, -1, vx)] * speed_reps
   for col in range(len(names)):
     for level in range(num_levels):
       for vx in TERRAIN_COMMANDS:
@@ -137,8 +134,8 @@ def main() -> None:
   col = torch.tensor([p[1] for p in plan], device=device)
   level = torch.tensor([p[2] for p in plan], device=device)
   cmd_vx = torch.tensor([p[3] for p in plan], device=device)
-  is_sprint = kind == 0
-  level[is_sprint] = origins[:, col[is_sprint], 0].argmin(dim=0)  # the -x end of the lane
+  is_speed_run = kind == 0
+  level[is_speed_run] = origins[:, col[is_speed_run], 0].argmin(dim=0)  # the -x end of the column
 
   # Place every env on its cell before the wrapper's reset spawns the robots.
   terrain.terrain_levels[:] = level
@@ -159,7 +156,7 @@ def main() -> None:
   dt = POSITION_TIMING.ctrl_dt
   edge = EDGE_FRACTION * patch / 2
   deadline = edge / (MIN_SPEED_FRACTION * cmd_vx)  # [B] seconds allowed to reach the edge
-  horizon = max(SPRINT_END_S, float(deadline[~is_sprint].max()))
+  horizon = max(SPEED_END_S, float(deadline[~is_speed_run].max()))
 
   fell = torch.zeros(num_envs, dtype=torch.bool, device=device)
   crossed_at = torch.full((num_envs,), float("inf"), device=device)
@@ -184,8 +181,8 @@ def main() -> None:
 
       alive = ~fell
       # Episodes never time out here, so any `done` is a fall. A terrain robot that has
-      # already crossed its patch is finished; a sprinter is on the clock until the end.
-      fell |= dones.bool() & alive & (is_sprint | ~torch.isfinite(crossed_at))
+      # already crossed its patch is finished; a speed run is on the clock until the end.
+      fell |= dones.bool() & alive & (is_speed_run | ~torch.isfinite(crossed_at))
       alive = ~fell
 
       offset = (robot.data.root_link_pos_w[:, :2] - env.scene.env_origins[:, :2]).abs()
@@ -196,8 +193,8 @@ def main() -> None:
         crossed_at,
       )
 
-      if SPRINT_SETTLE_S <= t <= SPRINT_END_S:
-        scored = is_sprint & alive
+      if SPEED_SETTLE_S <= t <= SPEED_END_S:
+        scored = is_speed_run & alive
         speed_sum += robot.data.root_link_lin_vel_b[:, 0] * scored
         speed_n += scored
         qd = robot.data.joint_vel
@@ -211,15 +208,15 @@ def main() -> None:
   print(f"\ncheckpoint: {checkpoint}")
   print(f"{num_envs} envs, {horizon:.1f} s each, {time.perf_counter() - start:.0f} s wall\n")
 
-  print(f"SPRINT  (steady state over {SPRINT_SETTLE_S:.0f}-{SPRINT_END_S:.0f} s, "
-        f"{sprint_reps} robots per row)")
+  print(f"SPEED  (steady state over {SPEED_SETTLE_S:.0f}-{SPEED_END_S:.0f} s, "
+        f"{speed_reps} robots per row)")
   print("  'outside' = share of joint-steps asking for torque beyond the real motor's"
         " torque-speed line")
-  for lane in lanes:
-    print(f"\n  {names[lane]}")
+  for speed_col in speed_cols:
+    print(f"\n  {names[speed_col]}")
     print("    cmd m/s  reached  ratio   fell   outside   peak hip/thigh/calf rad/s")
-    for vx in SPRINT_COMMANDS:
-      m = is_sprint & (col == lane) & (cmd_vx == vx)
+    for vx in SPEED_COMMANDS:
+      m = is_speed_run & (col == speed_col) & (cmd_vx == vx)
       scored = m & (speed_n > 0)
       reached = (speed_sum[scored] / speed_n[scored]).mean().item() if scored.any() else 0.0
       out = (outside[scored] / speed_n[scored]).mean().item() if scored.any() else 0.0
